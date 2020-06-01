@@ -1,0 +1,188 @@
+
+
+clear variables;
+
+global tstart Cr_slope Cr0
+
+%parameters:
+
+f = 50.0;
+omega = 2*pi*f;
+Ld = 7e-3;
+Ll = 2.5067e-3;
+Lm = 6.6659e-3;
+LD = 8.7419e-3;
+LF = 7.3835e-3;
+Lq = 5.61e-3;
+MQ = 4.7704e-3;
+Rs = 1.6e-3;
+RF = 9.845e-4;
+RD = 0.11558;
+RQ = 0.0204;
+n = 1;
+J = 2.812e4;
+
+% initial conditions for no-load steady-state:
+
+fdr0 = 63.66;
+fqr0 = -0.0108;
+fF0 = 72.984;
+fD0 = 65.4769;
+fQ0 = -0.0012;
+delta0 = 0.0;
+wm0 = omega;
+
+% inputs:
+
+Cr0 = -2.65e5;
+V = 20e3;
+VF = 10.3;
+
+% derived:
+
+det1 = Lm*(Lm^2-LF*Lm)+Lm*(Lm^2-LD*Lm)+(Ll+Ld)*(LD*LF-Lm^2);
+det2 = (Lq+Ll)*MQ-MQ^2;
+
+K1 = [ LD*LF-Lm^2,	Lm^2-LD*Lm,	        Lm^2-LF*Lm      ;
+	   Lm^2-LD*Lm,	LD*(Ll+Ld)-Lm^2,	Lm^2-(Ll+Ld)*Lm ;
+	   Lm^2-LF*Lm,	Lm^2-(Ll+Ld)*Lm,	LF*(Ll+Ld)-Lm^2 ] ./ det1;
+
+K2 = [ MQ, -MQ   ;
+	  -MQ, Lq+Ll ] ./ det2;
+      
+
+% simulation params:
+
+dt = 5e-5;
+tmax = 3.0;
+npts = floor(tmax / dt);
+tstart = 0.1;
+Cr_slope = -Cr0 / 5.0;
+
+% initialization:
+
+t(1) = 0;
+
+% init states:
+
+fdr(1) = fdr0;
+fqr(1) = fqr0;
+fF(1) = fF0;
+fD(1) = fD0;
+fQ(1) = fQ0;
+delta(1) = delta0;
+wm(1) = wm0;
+
+Cr(1) = 0;
+iqr(1) = 0;
+idr(1) = 0;
+vdr(1) = 0;
+vqr(1) = 0;
+
+% simulation loop:
+
+iF = 0;
+iD = 0;
+iQ = 0;
+
+for k = 2:npts
+    
+    Cr(k) = rampcr(t(k-1));
+    
+    idr(k) = K1(1,:) * [fdr(k-1); fF(k-1); fD(k-1)];
+    iF  = K1(2,:) * [fdr(k-1); fF(k-1); fD(k-1)];
+    iD  = K1(3,:) * [fdr(k-1); fF(k-1); fD(k-1)];
+    iqr(k) = K2(1,:) * [fqr(k-1); fQ(k-1)];
+    iQ  = K2(2,:) * [fqr(k-1); fQ(k-1)];
+    
+    dfdr = vdr(k-1) - Rs * idr(k) + wm(k-1) * fqr(k-1);
+    dfqr = vqr(k-1) - Rs * iqr(k) - wm(k-1) * fdr(k-1);
+    dfF = VF - iF * RF;
+    dfD = -iD * RD;
+    dfQ = -iQ * RQ;
+    ddelta = wm(k-1) - omega;
+    dwm = n/J * (iqr(k) * fdr(k-1) - idr(k) * fqr(k-1) - Cr(k));
+    
+    fdr(k) = fdr(k-1) + dfdr * dt;
+    fqr(k) = fqr(k-1) + dfqr * dt;
+    fF(k) = fF(k-1) + dfF * dt;
+    fD(k) = fD(k-1) + dfD * dt;
+    fQ(k) = fQ(k-1) + dfQ * dt;
+    delta(k) = delta(k-1) + ddelta * dt;
+    wm(k) = wm(k-1) + dwm * dt;
+
+    vdr(k) = V * sin(delta(k));
+    vqr(k) = V * cos(delta(k));
+    
+    t(k) = t(k-1) + dt;
+end
+
+figure;
+
+r = 4;
+c = 2;
+i = 0;
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, Cr);
+xlabel("t (s)");
+ylabel("C_r (N.m)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, fdr);
+xlabel("t (s)");
+ylabel("\phi_d_r (Wb)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, fqr);
+xlabel("t (s)");
+ylabel("\phi_q_r (Wb)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, fF);
+xlabel("t (s)");
+ylabel("\phi_F (Wb)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, fD);
+xlabel("t (s)");
+ylabel("\phi_D (Wb)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, fQ);
+xlabel("t (s)");
+ylabel("\phi_Q (Wb)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, delta);
+xlabel("t (s)");
+ylabel("\delta (rad)");
+
+i = i + 1;
+subplot(r, c, i);
+plot(t, wm);
+xlabel("t (s)");
+ylabel("\omega_m (rad/s)");
+
+function cr = rampcr(t)
+
+    global tstart Cr_slope Cr0
+    
+    if t > tstart
+        cr = -(t - tstart) * Cr_slope;
+    else
+        cr = 0.0;
+    end
+    if cr <= Cr0
+        cr = Cr0;
+    end 
+end
+
+

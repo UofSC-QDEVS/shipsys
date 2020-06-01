@@ -1,0 +1,49 @@
+clear variables;
+
+dqmin = 0.01;
+dqmax = 0.01;
+dqerr = 0.001;
+
+sys = QdlSystem(dqmin, dqmax, dqerr);
+
+vg = QdlNode('ground', 0, 0, 0);
+vg.source_type = QdlSystem.SourceDC;
+vg.vdc = 0;
+
+ed = QdlNode('d-axis excitation voltage (V)', 0, 0, 0);
+ed.source_type = QdlSystem.SourceDC;
+ed.vdc = Efd;
+
+vd = QdlNode('D-axis terminal voltage (V)', Clim, 0, 0);
+vdc = QdlNode('DC Terminal voltage (V)', J/n, 0, 0);
+bd = QdlBranch('D-axis branch', La, Ra, 0);
+
+bd.connect(ed, vg);
+bs.connect(vd, vdc);
+
+bd.add_tnodefunc(vd, @);
+vd.add_sbranch(ba, Kt);
+
+sys.add_node(vg);   % index 1
+sys.add_node(ed);   % index 2
+sys.add_node(vd);   % index 3
+sys.add_node(vdc);  % index 4
+sys.add_branch(bd); % index 5
+
+sys.init();
+sys.runto(20);
+
+figure;
+
+r = 3;
+c = 2;
+nbins = 1000;
+ymax = 100;
+
+dots = 1;
+
+subplot(r, c, 1);
+sys.plot(ed, dots, 1, 1, 0, nbins, 0, 0, 0, ymax);
+
+subplot(r, c, 2);
+sys.plot(ba, dots, 1, 1, 0, nbins, 0, 0, 0, ymax);
