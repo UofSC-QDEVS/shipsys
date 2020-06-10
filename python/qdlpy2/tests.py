@@ -1,4 +1,5 @@
 
+import os
 from math import pi, sin, cos, atan2, sqrt
 from cmath import rect
 import liqss
@@ -1141,7 +1142,7 @@ def shipsys4():
                    0
     w = w0 + dw
 
-         .----------+----------+-------.       
+         .----------+----------+-------.             
          |          |          |       |       
         ,-.    1   _|_    1    >      / \      
     Tm ( ^ )  ---  ___   ---   >     ( v ) Te  
@@ -1150,7 +1151,7 @@ def shipsys4():
          '----------+----------+-------'       
 
 
-               Ra  Xd"          1:Sd         Rf   Lf
+               Ra  Xd"          1:Sd         Rf   Lf                             
          .----VVV--UUU----+---.      .-------VVV--UUU---+-----------------.
          |    --->        |   |      |         --->     |      --->       |
       + ,-.    Id     +  _|_   ) || (          idc      |       ip        |
@@ -1211,7 +1212,7 @@ def shipsys4():
     # Machine speed
     # Pm from the machine
     # Ship Velocity (m/s) and Propulsion sys Thurst (N)
-    # Drag in SI units ??? R = V/I = N / m / s = (N.s/m ??)
+    # Drag in SI units (N) Fp = Rp * ip
     # (Cummumlative updates/time for all, and state space value @ dt for all, error quanity/time)
 
     # per unit:
@@ -1227,12 +1228,13 @@ def shipsys4():
     Ld = 0.019
     Lq = 0.019
     Rf = 0.01   
-    Lf = 0.1              
-    Cf = 0.1               
-    Clim = 0.0001 
-    M = 0.019     # machine inertia constant
-    Cm = 1000.0     # effective ship mass as seen from electrical bus
+    Lf = 0.001              
+    Cf = 0.01               
+    Clim = 0.01 
+    M = 10.0        # machine inertia constant
+    Ms = 10.0     # effective ship mass as seen from electrical bus
     Rp = 1.0
+    Ra = 0.02
 
     RpDC  = 10.0
     RpAmp = 2.0
@@ -1243,15 +1245,16 @@ def shipsys4():
     # initial conditions:
 
     Pm0 = 0.5
-    id0 = 0.38725615779883765
-    iq0 = 6.014934903090364
-    wm0 = 0.0
-    th0 = 14.01835504544383
-    ic0 = 0.00609485032397113
-    vd0 = 0.039542153999850754
-    vq0 = 0.6102210225728883
-    vc0 = 0.04174084318643379
-    ip0 = 0.004538490569804933
+    id0 = -0.10962907586738573
+    iq0 = 3.334066509980322
+    wm0 = -2.35569457391613e-14
+    th0 = 14.071419824454583
+    ic0 = 0.0008831570893935172
+    vd0 = -0.0021687794137176097
+    vq0 = 0.0666797633007311
+    vc0 = 0.008829940361807747
+    ip0 = 0.0008831569989399603
+    rp0 = 10.0
 
     # inputs:
 
@@ -1264,23 +1267,22 @@ def shipsys4():
     ed = lambda: efd0 * sin(th.q)
     eq = lambda: efd0 * cos(th.q)
 
-    def pe():
-        Pe = 3/2 * (ed()*id.q - eq()*iq.q)
-        #print(Pe)
-        return Pe
-
+    Pe  = lambda: 3/2 * (ed()*id.q - eq()*iq.q)
+    Fd  = lambda: rp.q * ip.q  
+    Pdc = lambda: vdc.q * idc.q
+    Ps  = lambda: ip.q * rp.q * rp.q   # ship propulsion power (W)
 
     # diff eq:
 
-    did = lambda: 1/Ld * (ed() - id.q * 0.02 - wm.q * iq.q * 0.019 - 1.0)
-    diq = lambda: 1/Lq * (eq() - iq.q * 0.02 + wm.q * id.q * 0.019)
-    dwm = lambda: 1/10.0 * (Pm.q - Kd*wm.q + pe())
+    did = lambda: 1/Ld * (ed() - id.q * Ra - wm.q * iq.q * Ld - efd0)
+    diq = lambda: 1/Lq * (eq() - iq.q * Ra + wm.q * id.q * Lq)
+    dwm = lambda: 1/M * (Pm.q - Kd*wm.q + Pe())
     dth = lambda: -wm.q * wbase
-    dvd = lambda: 1/0.1 * (id.q - ic.q * sd() - 10.0 * vd.q ) 
-    dvq = lambda: 1/0.1 * (iq.q - ic.q * sq() - 10.0 * vq.q )
-    dvc = lambda: 1/0.1 * (ic.q - ip.q) 
-    dic = lambda: 1/0.1 * (vd.q * sd() + vq.q * sq() - ic.q * 0.01 - vc.q)
-    dip = lambda: 1/Cm * (vc.q - ip.q * rp.q)
+    dvd = lambda: 1/Clim * (id.q - ic.q * sd() - vd.q / Ra) 
+    dvq = lambda: 1/Clim * (iq.q - ic.q * sq() - vq.q / Ra)
+    dvc = lambda: 1/Cf * (ic.q - ip.q) 
+    dic = lambda: 1/Lf * (vd.q * sd() + vq.q * sq() - ic.q * Rf - vc.q)
+    dip = lambda: 1/Ms * (vc.q - ip.q * rp.q)
 
     dqmin = 0.0001
     dqmax = 0.001
@@ -1288,18 +1290,30 @@ def shipsys4():
 
     sys = liqss.Module("shipsys", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-    Pm = liqss.Atom("Pm", source_type=liqss.SourceType.RAMP, x1=0.5, x2=1.0, t1=5.0, t2=30.0, units="MW", output_scale=sbase*1e-6)
-    rp = liqss.Atom("rp", source_type=liqss.SourceType.SINE, units="", x0=RpDC, xa=RpAmp, freq=fp, t1=30.0, dq=0.0001, output_scale=zbase)
+    Pm = liqss.Atom("Pm", source_type=liqss.SourceType.RAMP, x1=0.5, x2=1.0, t1=1.0, t2=20.0, units="MW", output_scale=sbase*1e-6)
+    
+    # 1. low speed:
+    RpDC = 10.0
+    rp = liqss.Atom("rp", source_type=liqss.SourceType.CONSTANT, units="Ns/m", x0=RpDC, output_scale=zbase)
 
-    id = liqss.Atom("id", x0=id0, func=did, units="A", dq=0.01, output_scale=ibase)
-    iq = liqss.Atom("iq", x0=iq0, func=diq, units="A", dq=0.01, output_scale=ibase)
-    wm = liqss.Atom("wm", x0=wm0, func=dwm, units="RPM",  dq=0.001, output_scale=wbase*9.5493)
-    th = liqss.Atom("th", x0=th0, func=dth, units="deg", dq=0.001, output_scale=180.0/pi)
-    vd = liqss.Atom("vd", x0=vd0, func=dvd, units="kV",   dq=0.01, output_scale=vbase*1e-3)
-    vq = liqss.Atom("vq", x0=vq0, func=dvq, units="kV",   dq=0.01, output_scale=vbase*1e-3)
-    vc = liqss.Atom("vc", x0=vc0, func=dvc, units="kV",   dq=0.01, output_scale=vbase*1e-3)
-    ic = liqss.Atom("ic", x0=ic0, func=dic, units="A",   dq=0.01, output_scale=ibase)
-    ip = liqss.Atom("ip", x0=ip0, func=dip, units="knots",   dq=0.00001, output_scale=ibase*1.94384)
+    # 2. high speed:
+    #RpDC = 10.0
+    #rp = liqss.Atom("rp", source_type=liqss.SourceType.CONSTANT, units="Ns/m", x0=RpDC, output_scale=zbase)
+
+    # 3. sine drag:
+    #rp = liqss.Atom("rp", source_type=liqss.SourceType.SINE, units="", x0=RpDC, xa=RpAmp, freq=fp, t1=30.0, dq=0.0001, output_scale=zbase)
+    
+    dq0 = 0.001
+
+    id = liqss.Atom("id", x0=id0, func=did, units="A",       dq=dq0, output_scale=ibase)
+    iq = liqss.Atom("iq", x0=iq0, func=diq, units="A",       dq=dq0, output_scale=ibase)
+    wm = liqss.Atom("wm", x0=wm0, func=dwm, units="RPM",     dq=dq0, output_scale=wbase*9.5493)
+    th = liqss.Atom("th", x0=th0, func=dth, units="deg",     dq=dq0, output_scale=180.0/pi)
+    vd = liqss.Atom("vd", x0=vd0, func=dvd, units="kV",      dq=dq0, output_scale=vbase*1e-3)
+    vq = liqss.Atom("vq", x0=vq0, func=dvq, units="kV",      dq=dq0, output_scale=vbase*1e-3)
+    vc = liqss.Atom("vc", x0=vc0, func=dvc, units="kV",      dq=dq0, output_scale=vbase*1e-3)
+    ic = liqss.Atom("ic", x0=ic0, func=dic, units="A",       dq=dq0, output_scale=ibase)
+    ip = liqss.Atom("ip", x0=ip0, func=dip, units="knots",   dq=dq0, output_scale=ibase*1.94384)
 
     id.connects(th)
     iq.connects(th)
@@ -1316,11 +1330,60 @@ def shipsys4():
 
     # scenerio 1 (low drag)
 
-    if 0:
+    if 1:
+
         RpDC = 10.0
-        rp = liqss.Atom("rp", source_type=liqss.SourceType.CONSTANT, units="", x0=Rp, output_scale=zbase)
-        sys.initialize()
-        sys.run_to(300.0, verbose=True) #, fixed_dt=1.0e-2)
+        rp = liqss.Atom("rp", source_type=liqss.SourceType.CONSTANT, units="", x0=RpDC, output_scale=zbase)
+
+        tmax = 1.0
+
+        # ss sim:
+        sys.initialize()                                                                                
+        sys.run_to(tmax, verbose=True, fixed_dt=1.0e-4)
+        sys.save_data()
+
+        dq_sclfactors = [1.0, 0.1, 0.1]
+
+        errors = {}
+
+        for dq_sclfactor in dq_sclfactors:
+
+            # qss sim:
+            for name, atom in sys.atoms.items():
+                dq = atom.dq * dq_sclfactor
+                atom.dq = dq
+                atom.dqmax = dq
+                atom.dqmin = dq
+
+            sys.initialize()
+            sys.run_to(tmax, verbose=True)
+
+            # get relative error:
+            for name, atom in sys.atoms.items():
+
+                e = atom.get_error(typ="l2")
+
+                if not name in errors:
+                    errors[name] = {}
+                    errors[name]["dq"] = []
+                    errors[name]["e"] = []
+
+                errors[name]["dq"].append(atom.dq)
+                errors[name]["e"].append(e)
+
+                #print("{} L^2 Relative Error = {:6.3f} %".format(name, e*100.0))
+
+        # todo for accuracy plots:
+        # 1) pick 3 atoms (fast, medium, slow)
+        # 2) log scale(s) at least for x axes
+        # 3) cummulative updates on sec. y axis (performace)
+
+        if 0:
+            plt.figure()
+            for name, data in errors.items():
+                 plt.plot(data["dq"], data["e"], label=name)
+            plt.legend()
+            plt.show()
     
     # scenerio 2 (high drag)
 
@@ -1332,9 +1395,9 @@ def shipsys4():
 
     # scenerio 3 (choppy)
 
-    if 1:
+    if 0:
         sys.initialize()
-        sys.run_to(300.0, verbose=True) #, fixed_dt=1.0e-3)
+        sys.run_to(10.0, verbose=True) #, fixed_dt=1.0e-3)
 
     # Accuracy Test: plot time/quantum for the first few seconds
 
@@ -1347,28 +1410,59 @@ def shipsys4():
     f = open(r"c:\temp\initcond.txt", "w")
 
     r, c, j = 6, 2, 1
-    plt.figure()
+    #plt.figure()
 
     for i, (name, atom) in enumerate(sys.atoms.items()):
 
-        dat = open(r"c:\temp\output_{}_{}.dat".format(name, atom.units), "w")
+        #dat = open(r"c:\temp\output_{}_{}.dat".format(name, atom.units), "w")
 
-        for t, x in zip(atom.tzoh, [x * atom.output_scale for x in atom.qzoh]):
-            dat.write("{}\t{}\n".format(t, x))
+        #for t, x in zip(atom.tzoh, [x * atom.output_scale for x in atom.qzoh]):
+        #    dat.write("{}\t{}\n".format(t, x))
 
-        f.write("    {}0 = {}\n".format(name, atom.x))
+        try:  # get steady state from last state space point
+            f.write("    {}0 = {}\n".format(name, atom.qout2[-1]))
+        except:  # or from last qss point:
+            f.write("    {}0 = {}\n".format(name, atom.qout[-1]))
+
         if name in ("id", "iq"): continue
-        plt.subplot(r, c, j)
-        plt.plot(atom.tzoh, [x * atom.output_scale for x in atom.qzoh], 'b-')
-        #plt.plot(atom.tout, atom.qout, 'k.')
+
+        #plt.subplot(r, c, j)
+        plt.figure()
+
+        ax1 = plt.gca()
+        ax2 = ax1.twinx()
+        
+        ax1.plot(atom.tzoh, [x * atom.output_scale for x in atom.qzoh], 'b-')
+
+        try:
+            ax1.plot(atom.tout2, [x * atom.output_scale for x in atom.qout2], 'c--')
+        except:
+            pass
+
+        ax2.plot(atom.tout, atom.nupd, 'r-')
+        
+        ax1.set_ylabel("{} ({})".format(atom.name, atom.units), color='b')
+        ax2.set_ylabel('cummulative updates', color='r')
+
         plt.xlabel("t (s)")
-        plt.ylabel(name + " (" + atom.units + ")")
+        plt.legend()
+        ax1.grid()
+
+        dir = r"c\temp"  # <--- change this to latex image folder dir !
+        filepath = name + ".pdf" # os.path.join(dir, name + ".pdf")
+        plt.savefig(filepath, bbox_inches='tight')
+
         j += 1
 
-        dat.close()
+        #dat.close()
 
     f.close()
-    plt.show()
+    #plt.show()
+
+    # presentation plots:
+
+    #plt.figure()
+     
 
 
 if __name__ == "__main__":

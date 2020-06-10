@@ -1,7 +1,8 @@
 
-from math import sin, asin, pi
+from math import sin, asin, pi, sqrt
 from matplotlib import pyplot as plt
 from collections import OrderedDict as odict
+import numpy
 
 
 _EPS = 1.0e-9
@@ -122,6 +123,9 @@ class Atom(object):
 
         self.tzoh = None  # zero-order hold output times quantized output
         self.qzoh = None  # zero-order hold quantized output 
+
+        self.tout2 = None  # output times quantized output
+        self.qout2 = None  # quantized output 
 
         self.updates = 0
 
@@ -432,6 +436,34 @@ class Atom(object):
             self.tzoh.append(self.time)           
             self.qzoh.append(self.q)
 
+    def get_error(self, typ="l2"):
+
+        # interpolate qss to ss time vector:
+
+        qout_interp = numpy.interp(self.tout2, self.tout, self.qout)
+
+        if typ.lower().strip() == "l2":
+
+            # calculate the L^2 relative error:
+            #     ________________
+            #    / sum((y - q)^2)
+            #   /  --------------
+            # \/      sum(y^2)
+            #
+
+            dy_sqrd_sum = 0.0
+            y_sqrd_sum = 0.0
+
+            for q, y in zip(qout_interp, self.qout2):
+                dy_sqrd_sum += (y - q)**2
+                y_sqrd_sum += y**2
+
+            return sqrt(dy_sqrd_sum / y_sqrd_sum)
+
+        return None
+
+
+
 
 class ComplexAtom(Atom):
 
@@ -641,7 +673,7 @@ class Module(object):
         
         # simulation variables:
         self.tstop = 0.0  # end simulation time
-        self.time = 0.0  # current simulation time
+        self.time = 0.0   # current simulation time
         self.iprint = 0
 
     def add_atoms(self, *atoms):
@@ -683,6 +715,7 @@ class Module(object):
                 for atom in self.atoms.values():
                     atom.step(self.time)
                     atom.save()
+                print("t = {0:5.2f} s".format(self.time))
                 self.time += dt
             return
 
@@ -751,6 +784,13 @@ class Module(object):
             if not triggered:
                 break
             i += 1
+
+    def save_data(self):
+
+        for atom in self.atoms.values():
+
+            atom.tout2 = atom.tout[:]
+            atom.qout2 = atom.qout[:]
 
     def print_percentage(self, header=False, footer=False):
         
