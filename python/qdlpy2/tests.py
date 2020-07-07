@@ -308,138 +308,119 @@ def genset():
         #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
         return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
-    from_saved = True
+    plot_only_mode = 0
 
-    if not from_saved:
+    tmax = 6.0
 
-        ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+    plot_files = []
 
-        # machine:
-        tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e2, units="N.m")
-        #tm    = liqss.Atom("tm", source_type=liqss.SourceType.CONSTANT, x0=tm0, units="N.m", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        #tm    = liqss.Atom("tm", source_type=liqss.SourceType.STEP, x0=tm0, x1=tm0*1.1, t1=10.0, units="N.m")
+    dq_points = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
 
-        #dqmin = 1e-4
-        #dqmax = 1e-4
+    if not plot_only_mode:
+
+        for dq in dq_points:
+
+            dqmin = dq
+            dqmax = dq
+
+            ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+
+            # machine:
+            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=5.0, t2=20.0, dq=1e2, units="N.m")
+            #tm    = liqss.Atom("tm", source_type=liqss.SourceType.CONSTANT, x0=tm0, units="N.m", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            #tm    = liqss.Atom("tm", source_type=liqss.SourceType.STEP, x0=tm0, x1=tm0*1.1, t1=10.0, units="N.m")
+
+            #dqmin = 1e-4
+            #dqmax = 1e-4
     
-        fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        fF    = liqss.Atom("fF",    x0=fF0,    func=dfF,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        fD    = liqss.Atom("fD",    x0=fD0,    func=dfD,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        fQ    = liqss.Atom("fQ",    x0=fQ0,    func=dfQ,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        wr    = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dqmin*0.1, dqmax=dqmax*0.1, dqerr=dqerr)
-        theta = liqss.Atom("theta", x0=theta0, func=dtheta, units="rad",   dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            fF    = liqss.Atom("fF",    x0=fF0,    func=dfF,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            fD    = liqss.Atom("fD",    x0=fD0,    func=dfD,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            fQ    = liqss.Atom("fQ",    x0=fQ0,    func=dfQ,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            wr    = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dqmin*0.1, dqmax=dqmax*0.1, dqerr=dqerr)
+            theta = liqss.Atom("theta", x0=theta0, func=dtheta, units="rad",   dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-        fdr.connects(fqr, fF, fD, wr, theta)
-        fqr.connects(fdr, fQ, wr, theta)
-        fF.connects(fdr, fD)
-        fD.connects(fdr, fF)  # iD
-        fQ.connects(fqr)  # iQ
-        wr.connects(fqr, fdr, fF, fD, fQ, tm)
-        theta.connects(wr)
+            fdr.connects(fqr, fF, fD, wr, theta)
+            fqr.connects(fdr, fQ, wr, theta)
+            fF.connects(fdr, fD)
+            fD.connects(fdr, fF)  # iD
+            fQ.connects(fqr)  # iQ
+            wr.connects(fqr, fdr, fF, fD, fQ, tm)
+            theta.connects(wr)
 
-        ship.add_atoms(tm, fdr, fqr, fF, fD, fQ, wr, theta)
+            ship.add_atoms(tm, fdr, fqr, fF, fD, fQ, wr, theta)
 
-        # algebraic atoms:
+            # algebraic atoms:
 
-        id0 = id()
-        iq0 = iq()
-        Id = liqss.Atom("id", source_type=liqss.SourceType.FUNCTION, srcfunc=id, srcdt=1e-3, x0=id0, units="A", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        Iq = liqss.Atom("iq", source_type=liqss.SourceType.FUNCTION, srcfunc=iq, srcdt=1e-3, x0=iq0, units="A", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            id0 = id()
+            iq0 = iq()
+            Id = liqss.Atom("id", source_type=liqss.SourceType.FUNCTION, srcfunc=id, srcdt=1e-3, x0=id0, units="A", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            Iq = liqss.Atom("iq", source_type=liqss.SourceType.FUNCTION, srcfunc=iq, srcdt=1e-3, x0=iq0, units="A", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-        ship.add_atoms(Id, Iq)
+            ship.add_atoms(Id, Iq)
 
-        vd0 = vd()
-        vq0 = vq()
-        vpark0 = vpark()
-        Vd = liqss.Atom("vd", source_type=liqss.SourceType.FUNCTION, srcfunc=vd, srcdt=der_dt, x0=vd0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        Vq = liqss.Atom("vq", source_type=liqss.SourceType.FUNCTION, srcfunc=vq, srcdt=der_dt, x0=vq0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        Vpark = liqss.Atom("vpark", source_type=liqss.SourceType.FUNCTION, srcfunc=vpark, srcdt=der_dt, x0=vpark0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            vd0 = vd()
+            vq0 = vq()
+            vpark0 = vpark()
+            Vd = liqss.Atom("vd", source_type=liqss.SourceType.FUNCTION, srcfunc=vd, srcdt=der_dt, x0=vd0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            Vq = liqss.Atom("vq", source_type=liqss.SourceType.FUNCTION, srcfunc=vq, srcdt=der_dt, x0=vq0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            Vpark = liqss.Atom("vpark", source_type=liqss.SourceType.FUNCTION, srcfunc=vpark, srcdt=der_dt, x0=vpark0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-        ship.add_atoms(Vd, Vq, Vpark)
+            ship.add_atoms(Vd, Vq, Vpark)
 
-        p0 = p()
-        q0 = q()
-        P = liqss.Atom("p", source_type=liqss.SourceType.FUNCTION, srcfunc=p, srcdt=der_dt, x0=p0, units="W", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-        Q = liqss.Atom("q", source_type=liqss.SourceType.FUNCTION, srcfunc=q, srcdt=der_dt, x0=q0, units="VAr", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            p0 = p()
+            q0 = q()
+            P = liqss.Atom("p", source_type=liqss.SourceType.FUNCTION, srcfunc=p, srcdt=der_dt, x0=p0, units="W", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+            Q = liqss.Atom("q", source_type=liqss.SourceType.FUNCTION, srcfunc=q, srcdt=der_dt, x0=q0, units="VAr", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-        ship.add_atoms(P, Q)
+            ship.add_atoms(P, Q)
 
-        tmax = 60.0
+            # state space simulation:
 
-        # state space simulation:
+            ship.initialize()
+            ship.run_to(tmax, fixed_dt=1e-3)
+            ship.save_data()
 
-        ship.initialize()
-        ship.run_to(tmax, fixed_dt=1e-3)
-        ship.save_data()
+            # qdl simulation:
 
-        # qdl simulation:
+            ship.initialize()
+            ship.run_to(tmax, verbose=True)
 
-        ship.initialize()
-        ship.run_to(tmax, verbose=True)
+            saved_data = {}
 
-        saved_data = {}
+            for atom in ship.atoms.values():
 
-        for atom in ship.atoms.values():
+                saved_data[atom.name] = {}
+                saved_data[atom.name]["name"] = atom.name
+                saved_data[atom.name]["units"] = atom.units
+                saved_data[atom.name]["nupd"] = atom.nupd
+                saved_data[atom.name]["tzoh"] = atom.tzoh
+                saved_data[atom.name]["qzoh"] = atom.qzoh
+                saved_data[atom.name]["tout"] = atom.tout
+                saved_data[atom.name]["qout"] = atom.qout
+                saved_data[atom.name]["tout2"] = atom.tout2
+                saved_data[atom.name]["qout2"] = atom.qout2
+                saved_data[atom.name]["error"] = atom.get_error("rpd")
 
-            saved_data[atom.name] = {}
-            saved_data[atom.name]["name"] = atom.name
-            saved_data[atom.name]["units"] = atom.units
-            saved_data[atom.name]["nupd"] = atom.nupd
-            saved_data[atom.name]["tzoh"] = atom.tzoh
-            saved_data[atom.name]["qzoh"] = atom.qzoh
-            saved_data[atom.name]["tout"] = atom.tout
-            saved_data[atom.name]["qout"] = atom.qout
-            saved_data[atom.name]["tout2"] = atom.tout2
-            saved_data[atom.name]["qout2"] = atom.qout2
-            saved_data[atom.name]["error"] = atom.get_error("rpd")
+            filename = "saved_data_dq_{}.pickle".format(dq)
+            plot_files.append(filename)
+            f = open(filename, "wb")
+            pickle.dump(saved_data, f)
+            f.close()
 
-        f = open("saved_data.pickle", "wb")
-        pickle.dump(saved_data, f)
-        f.close()
 
-    else:
-        
-        f = open("saved_data.pickle", "rb")
+    time_plots = False
+
+    if time_plots:
+
+        plot_file = "saved_data.pickle"
+
+        f = open(plot_file, "rb")
         saved_data = pickle.load(f)
         f.close()
 
-    # plotting:
-
-    if not from_saved:
-
-        r, c = 5, 3
-
-        plt.figure()
-
-        for i, (name, atom) in enumerate(ship.atoms.items()):
-
-            plt.subplot(r, c, i+1)
-            plt.plot(atom.tout2, atom.get_error("rpd"), 'b-')
-            plt.xlabel("t (s)")
-            plt.ylabel(name + " (pu)")
-
-        plt.figure()
-        plt.show()
-
-        #f = open(r"c:\temp\initcond.txt", "w")
-
-        for i, (name, atom) in enumerate(ship.atoms.items()):
-
-            plt.subplot(r, c, i+1)
-            plt.plot(atom.tzoh, atom.qzoh, 'b-')
-            #plt.plot(atom.tout, atom.qout, 'k.')
-            plt.xlabel("t (s)")
-            plt.ylabel(name + " (" + atom.units + ")")
-
-            #f.write("    {}0 = {}\n".format(name, atom.q))
-
-        f.close()
-        plt.show()
-
-    else:
-
-        save_plots = False
+        # plotting:
 
         # Plots to create:
         # 1. Slow dynamic: Machine Speed (rpm)  (T ~= 1-10 sec)
@@ -462,7 +443,7 @@ def genset():
 
             yax1 = plt.gca()
             yax2 = yax1.twinx()
-        
+    
             touts, qouts, labels, linestyles = ["tout2", "tout"], ["qout2", "qout"], ["euler", "qss"], ["c--", "b-"]
 
             for idx in order:
@@ -490,9 +471,9 @@ def genset():
             plt.xlabel("t (s)")
 
             yax1.grid()
-            
-            if len(order) > 1: yax1.legend()
         
+            if len(order) > 1: yax1.legend()
+    
             if save2file:
                 if filename:
                     plt.savefig(filename)
@@ -505,8 +486,68 @@ def genset():
         #plot_paper("fdr", r"$\phi_{dr} (Wb)$", xlim=(14.9, 16.1), ylim1=(63, 64), ylim2=(0, 150000))
         #plot_paper("fqr", r"$\phi_{qr} (Wb)$", xlim=(14.9, 16.1), ylim1=(-1, 9), ylim2=(0, 200000), scl=-1)
 
-        plot_paper("fdr", r"$\phi_{dr} (Wb)$", save2file=True, filename="fdr_full_dq_1e-7.pdf", order=[1, 0])
-        plot_paper("wr", r"$\omega_{r} (rad/s)$", save2file=True, filename="wr_full_dq_1e-7.pdf", order=[1, 0])
+        plot_paper("fdr", r"$\phi_{dr} (Wb)$", save2file=False, filename="fdr_full_dq_1e-7.pdf", order=[1, 0])
+        plot_paper("wr", r"$\omega_{r} (rad/s)$", save2file=False, filename="wr_full_dq_1e-7.pdf", order=[1, 0])
+
+    accuracy_time_plots = False
+    accuracy_agg_plots = True
+
+    plot_files = ["saved_data_dq_0.01.pickle", "saved_data_dq_0.001.pickle", "saved_data_dq_0.0001.pickle", "saved_data_dq_1e-05.pickle", "saved_data_dq_1e-06.pickle"]
+
+    if accuracy_time_plots:
+
+        plt.figure()
+
+        for plot_file in plot_files:
+
+            f = open(plot_file, "rb")
+            saved_data = pickle.load(f)
+            f.close()
+
+            x = saved_data["fdr"]["tout2"]
+            y = saved_data["fdr"]["error"]
+
+            plt.plot(x, y, label=plot_file)
+
+        plt.legend()
+        plt.show()
+
+    def agg_error(atom):
+
+        qout_interp = np.interp(saved_data[atom]["tout2"], saved_data[atom]["tout"], saved_data[atom]["qout"])
+
+        dy_sqrd_sum = 0.0
+        y_sqrd_sum = 0.0
+
+        for q, y in zip(qout_interp, saved_data[atom]["qout2"]):
+            dy_sqrd_sum += (y - q)**2
+            y_sqrd_sum += y**2
+
+        return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(saved_data[atom]["qout2"]) - min(saved_data[atom]["qout2"]))
+
+    if accuracy_agg_plots:
+
+        plt.figure()
+
+        x = dq_points
+
+        for atom in ["fdr", "fqr"]:
+
+            y = []
+
+            for plot_file in plot_files:
+
+                f = open(plot_file, "rb")
+                saved_data = pickle.load(f)
+                f.close()
+
+                y.append(agg_error(atom))
+
+            plt.loglog(x, y, label=atom)
+
+        plt.legend()
+        plt.show()
+            
 
 def shipsys3():
         
