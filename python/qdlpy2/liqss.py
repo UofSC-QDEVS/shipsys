@@ -439,17 +439,18 @@ class Atom(object):
     def get_error(self, typ="l2"):
 
         # interpolate qss to ss time vector:
+        # this function can only be called after state space and qdl simualtions
+        # are complete
 
         qout_interp = numpy.interp(self.tout2, self.tout, self.qout)
 
         if typ.lower().strip() == "l2":
 
             # calculate the L^2 relative error:
-            #     ________________
-            #    / sum((y - q)^2)
-            #   /  --------------
-            # \/      sum(y^2)
-            #
+            #      ________________
+            #     / sum((y - q)^2)
+            #    /  --------------
+            #  \/      sum(y^2)
 
             dy_sqrd_sum = 0.0
             y_sqrd_sum = 0.0
@@ -460,7 +461,66 @@ class Atom(object):
 
             return sqrt(dy_sqrd_sum / y_sqrd_sum)
 
+        elif typ.lower().strip() == "nrmsd":
+
+            # calculate the normalized relative root mean squared error:
+            #      ________________
+            #     / sum((y - q)^2) 
+            #    /  ---------------
+            #  \/          N
+            # -----------------------
+            #       max(y) - min(y)
+
+            dy_sqrd_sum = 0.0
+            y_sqrd_sum = 0.0
+
+            for q, y in zip(qout_interp, self.qout2):
+                dy_sqrd_sum += (y - q)**2
+                y_sqrd_sum += y**2
+
+            return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(self.qout2) - min(self.qout2))
+
+
+        elif typ.lower().strip() == "re":
+
+            # Pointwise relative error
+            # e = [|(y - q)| / |y|] 
+
+            e = []
+
+            for q, y in zip(qout_interp, self.qout2):
+                e.append(abs(y-q) / abs(y))
+
+            return e
+
+        elif typ.lower().strip() == "rpd":
+
+            # Pointwise relative percent difference
+            # e = [ 100% * 2 * |y - q| / (|y| + |q|)] 
+
+            e = []
+
+            for q, y in zip(qout_interp, self.qout2):
+                den = abs(y) + abs(q)
+                if den >= _EPS: 
+                    e.append(100 * 2 * abs(y-q) / (abs(y) + abs(q)))
+                else:
+                    e.append(0)
+
+            return e
+
+
         return None
+
+    def get_previous_state(self):
+
+        if self.qout:
+            if len(self.qout) >= 2:
+                return self.qout[-2]
+            else:
+                return self.x0
+        else:
+            return self.x0
 
 
 
@@ -633,6 +693,7 @@ class ComplexAtom(Atom):
         self.qlo = self.q - complex(self.dq, self.dq) 
 
         self.qhi = self.q + complex(self.dq, self.dq) 
+
 
 
 class Module(object):

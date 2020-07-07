@@ -6,6 +6,10 @@ import liqss
 from matplotlib import pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d
+import pickle
+
+
+RAD_PER_SEC_2_RPM = 9.5492965964254
 
 
 def simple():
@@ -139,6 +143,8 @@ def genset():
     n = 1.0
     J = 2.812e4
 
+    #Ll = 0.35*2.25/(2*pi*50)
+
     Xd = wb * Ld
     Ra = Rs
 
@@ -164,8 +170,9 @@ def genset():
 
     # simulation parametmrs:
 
+    # good but slow: 1e-7 to 1e-4 err: 0.005
     dqmin = 1e-7
-    dqmax = 1e-2
+    dqmax = 1e-4
     dqerr = 0.005
     sr = 80
     tstop = 5.0
@@ -190,21 +197,23 @@ def genset():
 
     # initial states:
 
-    tm0 = -212000.0
-    fdr0 = 58.44942346499838
-    fqr0 = -25.271948253597103
-    fF0 = 69.33085257064145
-    fD0 = 61.82320401807718
-    fQ0 = -14.852994683671291
-    wr0 = 314.1592653589795
-    theta0 = 0.40811061756185407
-    vdc0 = 9887.2451996174
-    vt0 = 7321.34308456133
-    idc0 = 98.87242841394591
-    vf0 = 9887.146328154422
-    ip0 = 98.87242831447921
+    tm0 = 0.0
+    fdr0 = 63.661977153494156
+    fqr0 = -9.330288611488223e-11
+    fF0 = 72.98578663103797
+    fD0 = 65.47813807847828
+    fQ0 = -5.483354402732449e-11
+    wr0 = 314.1592653589793
+    theta0 = -5.1145054174461215e-05
+    vdc0 = -1.4784789895393902
+    vt0 = 1405.8929299980925
+    idc0 = -0.010300081646320524
+    vf0 = -1.4784641022274498
+    ip0 = -0.010300632920201253
 
     S = sqrt(3/2) * 2 * sqrt(3) / pi
+
+    der_dt = 1e-3
 
     # algebraic functions:
 
@@ -245,6 +254,24 @@ def genset():
         return (Sd() * (Ra * (id() - Sd() * idc.q) - Xd * (iq() - Sq() * idc.q))
              + Sq() * (Ra * (iq() - Sq() * idc.q) + Xd * (id() - Sd() * idc.q)))
 
+    # ed = did * Ll - wm * Ll * iq - vd
+    # eq = diq * Ll + wm * Ll * id - vq
+
+    def vd():
+        return ed() - (id() - Id.get_previous_state()) / der_dt * Ll + wr.q * Ll * iq()
+
+    def vq():
+        return eq() - (iq() - Iq.get_previous_state()) / der_dt * Ll - wr.q * Ll * id()
+
+    def vpark():
+        return sqrt(vd()*vd() + vq()*vq())
+
+    def p():
+        return iq() * vq() + id() * vd()
+
+    def q():
+        return id() * vq() - iq() * vd()
+
     # derivative functions:
 
     def didc():
@@ -281,76 +308,205 @@ def genset():
         #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
         return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
-    ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+    from_saved = True
 
-    # machine:
-    #tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=Tm_max, x2=Tm_max*0.8, t1=30.0, t2=60.0, dq=1e4, units="N.m")
-    #tm    = liqss.Atom("tm", source_type=liqss.SourceType.CONSTANT, x0=tm0, units="N.m", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    tm    = liqss.Atom("tm", source_type=liqss.SourceType.STEP, x0=tm0, x1=tm0*1.1, t1=10.0, units="N.m")
+    if not from_saved:
+
+        ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+
+        # machine:
+        tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e2, units="N.m")
+        #tm    = liqss.Atom("tm", source_type=liqss.SourceType.CONSTANT, x0=tm0, units="N.m", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        #tm    = liqss.Atom("tm", source_type=liqss.SourceType.STEP, x0=tm0, x1=tm0*1.1, t1=10.0, units="N.m")
+
+        #dqmin = 1e-4
+        #dqmax = 1e-4
     
-    fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    fF    = liqss.Atom("fF",    x0=fF0,    func=dfF,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    fD    = liqss.Atom("fD",    x0=fD0,    func=dfD,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    fQ    = liqss.Atom("fQ",    x0=fQ0,    func=dfQ,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    wr    = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    theta = liqss.Atom("theta", x0=theta0, func=dtheta, units="rad",   dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        fF    = liqss.Atom("fF",    x0=fF0,    func=dfF,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        fD    = liqss.Atom("fD",    x0=fD0,    func=dfD,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        fQ    = liqss.Atom("fQ",    x0=fQ0,    func=dfQ,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        wr    = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dqmin*0.1, dqmax=dqmax*0.1, dqerr=dqerr)
+        theta = liqss.Atom("theta", x0=theta0, func=dtheta, units="rad",   dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-    idc   = liqss.Atom("idc",   x0=idc0,   func=didc,   units="A",     dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    vf    = liqss.Atom("vf",    x0=vf0,    func=dvf,    units="V",     dqmin=dqmin, dqmax=dqmax, dqerr=dqerr, dmax=0.1)
-    ip    = liqss.Atom("ip",    x0=ip0,    func=dip,    units="A",     dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        fdr.connects(fqr, fF, fD, wr, theta)
+        fqr.connects(fdr, fQ, wr, theta)
+        fF.connects(fdr, fD)
+        fD.connects(fdr, fF)  # iD
+        fQ.connects(fqr)  # iQ
+        wr.connects(fqr, fdr, fF, fD, fQ, tm)
+        theta.connects(wr)
 
-    Vdc = liqss.Atom("vdc", source_type=liqss.SourceType.FUNCTION, srcfunc=vdc, srcdt=1e-3, x0=vdc0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-    Vt  = liqss.Atom("vt", source_type=liqss.SourceType.FUNCTION, srcfunc=vt, srcdt=1e-3, x0=vt0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        ship.add_atoms(tm, fdr, fqr, fF, fD, fQ, wr, theta)
 
-    fdr.connects(fdr, fqr, fF, fD, wr, theta)
-    fqr.connects(fdr, fqr, fF, fD, wr, theta)
-    fF.connects(fdr, fqr, fF, fD, wr, theta)
-    fD.connects(fdr, fqr, fF, fD, wr, theta)
-    fQ.connects(fdr, fqr, fF, fD, wr, theta)
-    wr.connects(fqr, fdr, fF, fD, fQ, tm)
-    theta.connects(wr)
+        # algebraic atoms:
 
-    idc.connects(fdr, fF, fD, fqr, fQ, theta, vf)
-    vf.connects(idc, ip) 
-    ip.connects(vf) 
+        id0 = id()
+        iq0 = iq()
+        Id = liqss.Atom("id", source_type=liqss.SourceType.FUNCTION, srcfunc=id, srcdt=1e-3, x0=id0, units="A", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        Iq = liqss.Atom("iq", source_type=liqss.SourceType.FUNCTION, srcfunc=iq, srcdt=1e-3, x0=iq0, units="A", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-    ship.add_atoms(tm, fdr, fqr, fF, fD, fQ, wr, theta)
-    ship.add_atoms(Vdc, Vt)
-    ship.add_atoms(idc, vf, ip)
+        ship.add_atoms(Id, Iq)
 
-    # simulation:
+        vd0 = vd()
+        vq0 = vq()
+        vpark0 = vpark()
+        Vd = liqss.Atom("vd", source_type=liqss.SourceType.FUNCTION, srcfunc=vd, srcdt=der_dt, x0=vd0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        Vq = liqss.Atom("vq", source_type=liqss.SourceType.FUNCTION, srcfunc=vq, srcdt=der_dt, x0=vq0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        Vpark = liqss.Atom("vpark", source_type=liqss.SourceType.FUNCTION, srcfunc=vpark, srcdt=der_dt, x0=vpark0, units="V", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-    ship.initialize()
-    #ship.run_to(50.0, fixed_dt=1e-3)
-    ship.run_to(10.0, verbose=True)
+        ship.add_atoms(Vd, Vq, Vpark)
 
-    Rp *= 0.8
+        p0 = p()
+        q0 = q()
+        P = liqss.Atom("p", source_type=liqss.SourceType.FUNCTION, srcfunc=p, srcdt=der_dt, x0=p0, units="W", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
+        Q = liqss.Atom("q", source_type=liqss.SourceType.FUNCTION, srcfunc=q, srcdt=der_dt, x0=q0, units="VAr", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-    #ship.run_to(90.0, fixed_dt=1e-3)
-    ship.run_to(10.01, verbose=True)
+        ship.add_atoms(P, Q)
 
-    # plot all results:
+        tmax = 60.0
 
-    r, c = 4, 4
+        # state space simulation:
 
-    plt.figure()
+        ship.initialize()
+        ship.run_to(tmax, fixed_dt=1e-3)
+        ship.save_data()
 
-    f = open(r"c:\temp\initcond.txt", "w")
+        # qdl simulation:
 
-    for i, (name, atom) in enumerate(ship.atoms.items()):
+        ship.initialize()
+        ship.run_to(tmax, verbose=True)
 
-        plt.subplot(r, c, i+1)
-        plt.plot(atom.tzoh, atom.qzoh, 'b-')
-        #plt.plot(atom.tout, atom.qout, 'k.')
-        plt.xlabel("t (s)")
-        plt.ylabel(name + " (" + atom.units + ")")
+        saved_data = {}
 
-        f.write("    {}0 = {}\n".format(name, atom.q))
+        for atom in ship.atoms.values():
 
-    f.close()
-    plt.show()
+            saved_data[atom.name] = {}
+            saved_data[atom.name]["name"] = atom.name
+            saved_data[atom.name]["units"] = atom.units
+            saved_data[atom.name]["nupd"] = atom.nupd
+            saved_data[atom.name]["tzoh"] = atom.tzoh
+            saved_data[atom.name]["qzoh"] = atom.qzoh
+            saved_data[atom.name]["tout"] = atom.tout
+            saved_data[atom.name]["qout"] = atom.qout
+            saved_data[atom.name]["tout2"] = atom.tout2
+            saved_data[atom.name]["qout2"] = atom.qout2
+            saved_data[atom.name]["error"] = atom.get_error("rpd")
 
+        f = open("saved_data.pickle", "wb")
+        pickle.dump(saved_data, f)
+        f.close()
+
+    else:
+        
+        f = open("saved_data.pickle", "rb")
+        saved_data = pickle.load(f)
+        f.close()
+
+    # plotting:
+
+    if not from_saved:
+
+        r, c = 5, 3
+
+        plt.figure()
+
+        for i, (name, atom) in enumerate(ship.atoms.items()):
+
+            plt.subplot(r, c, i+1)
+            plt.plot(atom.tout2, atom.get_error("rpd"), 'b-')
+            plt.xlabel("t (s)")
+            plt.ylabel(name + " (pu)")
+
+        plt.figure()
+        plt.show()
+
+        #f = open(r"c:\temp\initcond.txt", "w")
+
+        for i, (name, atom) in enumerate(ship.atoms.items()):
+
+            plt.subplot(r, c, i+1)
+            plt.plot(atom.tzoh, atom.qzoh, 'b-')
+            #plt.plot(atom.tout, atom.qout, 'k.')
+            plt.xlabel("t (s)")
+            plt.ylabel(name + " (" + atom.units + ")")
+
+            #f.write("    {}0 = {}\n".format(name, atom.q))
+
+        f.close()
+        plt.show()
+
+    else:
+
+        save_plots = False
+
+        # Plots to create:
+        # 1. Slow dynamic: Machine Speed (rpm)  (T ~= 1-10 sec)
+        # 2. Fast dynamics: fdr and fqr (fluxes)
+        #    a. full 60 sec
+        #    b. Zoom to time range 15.0 - 16.0 
+        # 3. Power plots:
+        #    a. input power: tm * wr (N.m.rad.s^-1 == W) . Output power: abs(p+j*q) (V.A == W)
+        #
+        #  Error plots:
+        #
+
+        # RAD_PER_SEC_2_RPM
+
+        # currents:
+
+        def plot_paper(atom, label, xlim=None, ylim1=None, ylim2=None, scl=1.0, save2file=False, filename=None, order=[0, 1]):
+
+            plt.figure()
+
+            yax1 = plt.gca()
+            yax2 = yax1.twinx()
+        
+            touts, qouts, labels, linestyles = ["tout2", "tout"], ["qout2", "qout"], ["euler", "qss"], ["c--", "b-"]
+
+            for idx in order:
+                x = saved_data[atom][touts[idx]]
+                y = [scl*v for v in saved_data[atom][qouts[idx]]]
+                yax1.plot(x, y, linestyles[idx], label=labels[idx], linewidth=1.0)
+
+            if ylim1: yax1.set_ylim(*ylim1)
+            yax1.set_ylabel(label)
+            yax1.spines['left'].set_color('blue')
+            yax1.tick_params(axis='y', colors='blue')
+            yax1.yaxis.label.set_color('blue')
+
+            x = saved_data[atom]["tout"]
+            y = saved_data[atom]["nupd"]
+            yax2.plot(x, y, 'r:')
+
+            if ylim2: yax2.set_ylim(*ylim2)
+            yax2.set_ylabel("qss updates (cummulative)")
+            yax2.spines['right'].set_color('red')
+            yax2.tick_params(axis='y', colors='red')
+            yax2.yaxis.label.set_color('red')
+
+            if xlim: plt.xlim(*xlim)
+            plt.xlabel("t (s)")
+
+            yax1.grid()
+            
+            if len(order) > 1: yax1.legend()
+        
+            if save2file:
+                if filename:
+                    plt.savefig(filename)
+                else:
+                    plt.savefig("{}.pdf".format(atom))
+            else:
+                plt.show()
+
+
+        #plot_paper("fdr", r"$\phi_{dr} (Wb)$", xlim=(14.9, 16.1), ylim1=(63, 64), ylim2=(0, 150000))
+        #plot_paper("fqr", r"$\phi_{qr} (Wb)$", xlim=(14.9, 16.1), ylim1=(-1, 9), ylim2=(0, 200000), scl=-1)
+
+        plot_paper("fdr", r"$\phi_{dr} (Wb)$", save2file=True, filename="fdr_full_dq_1e-7.pdf", order=[1, 0])
+        plot_paper("wr", r"$\omega_{r} (rad/s)$", save2file=True, filename="wr_full_dq_1e-7.pdf", order=[1, 0])
 
 def shipsys3():
         
@@ -753,7 +909,7 @@ def modulate(times, values, freq, npoints):
     return times2, values2
 
 
-def plot_cqss(*catoms):
+def plot_cqss(*catoms, npoints=1000):
 
     nplots = len(catoms)
 
@@ -765,49 +921,55 @@ def plot_cqss(*catoms):
 
         l1 = plt.plot(catom.tzoh, [abs(x) for x in catom.qzoh], 'c-', color='lightblue', linewidth=1)
         l2 = plt.plot(catom.tout, [abs(x) for x in catom.qout], 'b.', color="darkblue", markersize=3)
-        tmod, qmod = modulate(catom.tout, catom.qout, catom.freq1, 1000)
+        tmod, qmod = modulate(catom.tout, catom.qout, catom.freq1, npoints)
         l3 = plt.plot(tmod, qmod, 'b-', color='grey', linewidth=0.5, label="x(t) (modulated)")
         plt.xlabel("t(s)")
 
         plt.ylabel(catom.name + " (" + catom.units + ")", color='blue')
 
-        #ax2 = ax.twinx()
-        #l4 = ax2.plot(catom.tout, catom.nupd, 'c-', color='red', linewidth=1, label="cummulative updates")
-        #ax2.set_ylabel("updates", color='red')
-        #labels = ["|X(t)| qss (zoh)", "|X(t)| qss", "x(t) (modulated)", "cummulative updates"]
-        #plt.legend(handles=[l1[0], l2[0], l3[0], l4[0]], labels=labels, loc='lower right')
+        if 1:
+            ax2 = ax.twinx()
+            l4 = ax2.plot(catom.tout, catom.nupd, 'c-', color='red', linewidth=1, label="cummulative updates")
+            ax2.set_ylabel("updates", color='red')
+            labels = ["|X(t)| qss (zoh)", "|X(t)| qss", "x(t) (modulated)", "cummulative updates"]
+            plt.legend(handles=[l1[0], l2[0], l3[0], l4[0]], labels=labels, loc='lower right')
 
         labels = ["|X(t)| qss (zoh)", "|X(t)| qss", "x(t) (modulated)"]
         plt.legend(handles=[l1[0], l2[0], l3[0]], labels=labels, loc='lower right')
 
         ax.spines['left'].set_color('blue')
         ax.tick_params(axis='y', colors='blue', which='both')
-        #ax2.spines['right'].set_color('red')
-        #ax2.tick_params(axis='y', colors='red', which='both')
+
+        if 1:
+            ax2.spines['right'].set_color('red')
+            ax2.tick_params(axis='y', colors='red', which='both')
 
     plt.show()
 
 
 def dynphasor():
 
-    """
-             I
-            --->
-     .---VVV---UUU---o------.------.     
-    +|    R     L    |      |      |      +
-  E (~)           C ===  G [ ]  H (~) v   V
-    -|               |      |      |      -
-     '---------------+------'------'
-                    _|_
-                     -
+    """                     
+             I1                            I2
+            --->     n1                   --->         n1           
+     .---VVV---UUU---o-------.-------.-----VVV---UUU---o-------.-------.     
+    +|   R1    L1    |       |       |  +  R2    L2    |       |       |     +
+ E1 (~)          C1 ===  G1 [ ]  H1 (v) V1         C2 ===  G2 [ ]  H2 (v)    V2
+    -|               |       |       |  -              |       |       |     -
+     '---------------'-------'-------+-----------------'-------'-------'
+                                    _|_
+                                     -
 
-    VL = ZL * IL + d*IL/dt * L
+    E1 = I1'*L1 + I1*(R1 + jwL1) + V1
+    I1' = (1/L1) * (E1 - I1*(R1 + jwL1) - V1)
 
-    E = I'*L + I*(R + jwL) + V
-    I = V'*C + V*(G + 1/jwC) + H
+    I1 = V1'*C1 + V1*(G1 + 1/jwC1) + H1 + I2
 
-    I' = (1/L) * (E - I*(R + jwL)) - V 
-    V' = (1/C) * (I - V*(G + 1/jwC)) - H
+
+    E1 = I2'*L2 + I2*(R2 + jwL2) + V2 - V1
+
+
+    I2 = V2'*C2 + V2*(G2 + 1/jwC2) + H2
 
     """
 
@@ -815,42 +977,71 @@ def dynphasor():
     dqmax = 0.03
     dqerr = 0.01
 
-    f = 2.0
+    f = 60.0
     omega = 2.0*pi*f
-    E = rect(1.0, 0.0)
-    H = rect(1.0, 0.0)
-    R = 10.0
-    L = 1.0
-    C = 1.0
-    G = 10.0
-    jwL = complex(0.0, omega*L)
-    jwC = complex(0.0, omega*C)
+
+    E1 = rect(10000.0, 0.0)
+    H1 = rect(0.0, 0.0)
+    R1 = 0.001
+    L1 = 0.0001
+    C1 = 0.001
+    G1 = 0.0
+
+    E2 = rect(0.0, 0.0)
+    H2 = rect(100.0, 0.0)
+    R2 = 0.001
+    L2 = 0.0001
+    C2 = 0.001
+    G2 = 0.01
+
+    jwL1 = complex(0.0, omega*L1)
+    jwC1 = complex(0.0, omega*C1)
+    jwL2 = complex(0.0, omega*L2)
+    jwC2 = complex(0.0, omega*C2)
 
     sys = liqss.Module("dynphasor", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
-    def dI():
-        return (1/L) * (E - branch1.q*(R + jwL)) - node1.q 
 
-    def dV():
-        return (1/C) * (branch1.q - node1.q*(G + 1/jwC)) - H
+    #I1' = (1/L1) * (E1 - I1*(R1 + jwL1)) - V1 
+    #V1' = (1/C1) * (I1 - V2*(G1 + 1/jwC1)) - H1 - I2
+    #I2' = (1/L2) * I*(R2 + jwL2) - V2 
+    #V2' = (1/C2) * (I2 - V2*(G2 + 1/jwC2)) - H2
+    
+    def dI1():
+        return (1/L1) * (E1 - branch1.q*(R1 + jwL1) - node1.q) 
 
-    branch1 = liqss.ComplexAtom("branch1", units="A", func=dI, dq=0.00002, freq1=f)
-    node1 = liqss.ComplexAtom("node1", units="V", func=dV, dq=0.00001, freq1=f)
+    def dV1():
+        return (1/C1) * (branch1.q - node1.q*(G1 + 1/jwC1) - H1 - branch2.q)
+
+    def dI2():
+        return (1/L2) * (E2 - branch2.q*(R2 + jwL2) - node2.q + node1.q) 
+
+    def dV2():
+        return (1/C2) * (branch2.q - node2.q*(G2 + 1/jwC2) - H2)
+
+    branch1 = liqss.ComplexAtom("branch1", units="A", func=dI1, dq=10.0, freq1=f)
+    node1 =   liqss.ComplexAtom("node1",   units="V", func=dV1, dq=1.0,  freq1=f)
+    branch2 = liqss.ComplexAtom("branch2", units="A", func=dI2, dq=10.0, freq1=f)
+    node2 =   liqss.ComplexAtom("node2",   units="V", func=dV2, dq=1.0,  freq1=f)
     
     branch1.connect(node1)
-    node1.connect(branch1)
+    node1.connect(branch1, branch2)
+    branch2.connect(node1, node2)
+    node2.connect(branch2)
 
-    sys.add_atoms(node1, branch1)
+    sys.add_atoms(node1, branch1, node2, branch2)
 
     sys.initialize()
+
+    tmax = 0.01
     
-    sys.run_to(4, verbose=True)
+    sys.run_to(tmax*0.5, verbose=True)
 
-    E = 2.0 * E 
+    E1 = 2.0 * E1 
 
-    sys.run_to(8, verbose=True)
+    sys.run_to(tmax, verbose=True)
 
-    plot_cqss(node1, branch1)
+    plot_cqss(node1, branch1, node2, branch2, npoints=int(20*f*tmax))
 
 
 def genphasor():
@@ -1171,7 +1362,7 @@ def shipsys4():
 
 
                         
-               Ra  Xd"                   1:S                                Rf   Lf             Rp   Ms
+              Ra  Xd"                   1:S                                 Rf   Lf             Rp   Ms
          .----VVV--UUU------------.                 .----------+------------VVV--UUU----+-------VVV--UUU----|-
          |              --->      |                 |          |  ic ->            +    |        ip ->
       + ,-.              id      /+\  wm*iq*Ld +    |          |                  vdc  === Cf/2
@@ -1180,9 +1371,9 @@ def shipsys4():
          |                        |                 |          |     +                  -
          +------------------------'                /^\         |   
                                          id/Sd +  ( | )  Cf/2 ===   vc         id*sd + iq*sq = dvc * Cf/2 + ic
-              Ra   Xq"                   iq/Sq     \ /         |               dvc = 2/Cf * (id*sd + iq*sq - ic)
-         .----VVV--UUU------------.                 |          |     -
-         |              --->      |                 |          |            
+              Ra   Xq"                   iq/Sq     \ /         |               vc = ic * Rf + ic'*Lf + vdc
+         .----VVV--UUU------------.                 |          |     -         ic = vdc' * Cf/2 + ip
+         |              --->      |                 |          |               vdc = ip * Rp + ip' * Ms
       + ,-.              iq      /+\ -wm*id*Lq +    |          |            
     Eq (   )                    (   ) vc/Sq         |          |            
         `-'                      \-/                |          |            
@@ -1259,8 +1450,8 @@ def shipsys4():
     Cf = 0.01               
     Clim = 0.01 
     M = 10.0        # machine inertia constant
-    Ms = 10.0     # effective ship mass as seen from electrical bus
-    Rp = 1.0
+    Ms = 100.0     # effective ship mass as seen from electrical bus
+    Rp = 10.0
     Ra = 0.02
 
     RpDC  = 10.0
@@ -1274,16 +1465,16 @@ def shipsys4():
     # transformer method #1:
 
     Pm0 = 1.0
-    id0 = -0.10962907586738573
-    iq0 = 3.334066509980322
-    wm0 = -2.35569457391613e-14
-    th0 = 14.071419824454583
-    ic0 = 0.0008831570893935172
-    vd0 = -0.0021687794137176097
-    vq0 = 0.0666797633007311
-    vc0 = 0.008829940361807747
-    ip0 = 0.0008831569989399603
-    rp0 = 10.0
+    id0 = 0.0
+    iq0 = 0.0
+    wm0 = 0.0
+    th0 = 0.0
+    ic0 = 0.0
+    vd0 = 0.0
+    vq0 = 0.0
+    vc0 = 0.0
+    ip0 = 0.0
+    rp0 = 1.0
 
     # transformer method #2:
 
@@ -1304,8 +1495,8 @@ def shipsys4():
 
     # algebraic functions:
 
-    sq = lambda: S * cos(th.q)
-    sd = lambda: -S * sin(th.q) 
+    sq = lambda: sqrt(3/2) * 2 * sqrt(3) / pi * cos(th.q)
+    sd = lambda: -sqrt(3/2) * 2 * sqrt(3) / pi * sin(th.q) 
     ed = lambda: efd0 * sin(th.q)
     eq = lambda: efd0 * cos(th.q)
 
@@ -1379,8 +1570,7 @@ def shipsys4():
     # vp = liqss.Atom("vp", x0=vp0, func=dvp, units="kV",    dq=dq0) # , output_scale=vbase*1e-3)
     # ip = liqss.Atom("ip", x0=ip0, func=dip, units="knots", dq=dq0) # , output_scale=ibase*1.94384)
 
-        # 1. low speed:
-    RpDC = 10.0
+     # 1. low speed:
     rp = liqss.Atom("rp", source_type=liqss.SourceType.CONSTANT, units="Ns/m", x0=RpDC, output_scale=zbase)
 
     # 2. high speed:
@@ -1415,6 +1605,7 @@ def shipsys4():
     sys.add_atoms(Pm, wm, th, id, iq)
 
     sys.add_atoms(ic, vd, vq, vc, ic, ip, rp)  # transformer method #1
+
     #sys.add_atoms(vc, ic, vp, ip, rp)           # transformer method #2
 
     # scenerio 0 (physics test)
@@ -1524,7 +1715,7 @@ def shipsys4():
         except:  # or from last qss point:
             f.write("    {}0 = {}\n".format(name, atom.qout[-1]))
 
-        if name in ("id", "iq"): continue
+        #if name in ("id", "iq"): continue
 
         if subplot:
             plt.subplot(r, c, j)
@@ -1561,10 +1752,6 @@ def shipsys4():
     f.close()
     plt.show()
 
-    # presentation plots:
-
-    #plt.figure()
-
 
 def shipsys5():
 
@@ -1576,30 +1763,42 @@ def shipsys5():
                   _/
                    0
     w = w0 + dw
+
          .----------+----------+-------.             
          |          |          |       |       
         ,-.    1   _|_    1    >      / \      
     Tm ( ^ )  ---  ___   ---   >     ( v ) Te  
         `-'   2*H   |    Kd    >      \ /      
          |          |          |       |       
-         '----------+----------+-------'       
-               Ra  Xd"                    1:Sd         Rf   Lf                             
-         .----VVV--UUU----+-------+-----.      .-------VVV--UUU---+-----------------.
-         |    --->        |       |      |      |         --->     |      --->       |      id = dvd * Clim + vd / Rd + ic * sd
-      + ,-.    Id     +  _|_     <        ) || (          idc      |       ip        |      dvd = 1/Clim * (id - vd / Rd - ic * sd)
-    Ed (   )         Vd  ___     <  Rd    ) || (                   |                 |
-        `-'           -   |      <        ) || (                   |                < 
-         |                |       |      |      |     +            |      +         <  Rp
-         +----------------+-------+------'      '-.               _|_               < 
+         '----------+----------+-------'  
+         
+               Ra  Xd"     + ,-.           1:Sd         Rf   Lf                             
+         .----VVV--UUU------(   )----o---.      .----o--VVV--UUU---+-----------------.
+         |    --->           `-'         |      |         --->     |      --->       |      id = dvd * Clim + vd / Rd + ic * sd
+      + ,-.    Id          wm*Lm*id       ) || (          idc      |       ip        |      dvd = 1/Clim * (id - vd / Rd - ic * sd)
+    Ed (   )                              ) || (                   |                 |
+        `-'                               ) || (                   |                <       
+         |                               |      |     +            |      +         <  Rp
+         +---------------------------o---'      '-.               _|_               < 
                                                   |  vdc      Cf  ___    vf          |
-              Ra   Xq"                     1:Sq   |                |                (
-         .----VVV--UUU----+-------+------.      .-'   -            |      -         (  Lp
-         |    --->        |       |      |      |                  |                (
-      + ,-.    Iq     +  _|_     <        ) || (                   |                 |
-    Eq (   )         Vq  ___     <  Rd    ) || (                   |                 |
-        `-'           -   |      <        ) || (                   |                 |
-         |                |       |      |      |                  |                 |
-         +----------------+-------+------'      '------------------+-----------------'
+              Ra   Xq"       ,-. +         1:Sq   |                |                (
+         .----VVV--UUU------(   )----o---.      .-'   -            |      -         (  Lp
+         |    --->           `-'         |      |                  |                (
+      + ,-.    Iq          wm*Lm*id       ) || (                   |                 |
+    Eq (   )                              ) || (                   |                 |
+        `-'                               ) || (                   |                 |
+         |                               |      |                  |                 |
+         +---------------------------o---'      '----o-------------+-----------------'
+
+
+         [ DQ Machine ] --- [ Resitive DQ Load ]
+
+         [ Vd/Vq dc voltage sources ] --  [ DQ to DC Transformer ] -- [ Resitive Load ]    "three-winding qss tranformer"
+
+    Module 
+    N Atoms
+    M Ports (atom states alias with getters and setters)
+
     Te = Ed * Id - Eq * Iq            
     Tm = Pm / w
     S  = sqrt(3/2) * 2 * sqrt(3) / pi
@@ -1653,19 +1852,18 @@ def shipsys5():
     Xqpp = L * wbase / zbase
     H = Jm * wbase**2 / (2*sbase*npole)
     
-    Ld = 0.019
-    Lq = 0.019
+    Ld = 0.02
+    Lq = 0.02
     Rf = 0.01   
-    Lf = 0.001              
+    Lf = 0.01              
     Cf = 0.01               
-    Clim = 0.001 
-    Rlim = 0.1
-    M = 10.0        # machine inertia constant
-    Ms = 100.0      # effective ship mass as seen from electrical bus
-    Rp = 1.0
+    #Clim = 0.001 
+    #Rlim = 0.1
+    M = 10.0     # machine inertia constant
+    Ms = 100.0  # effective ship mass as seen from electrical bus
     Ra = 0.02
 
-    RpDC  = 1.0
+    RpDC  = 100.0
     RpAmp = 2.0
     fp = 1/30.0 # wave frequency
 
@@ -1674,16 +1872,26 @@ def shipsys5():
     # initial conditions:
 
     Pm0 = 1.0
-    id0 = -23.676582263147285
-    iq0 = -24.164661094648785
-    wm0 = 1.187943269393694e-08
-    th0 = -2.365410667483032
-    ic0 = 0.07386336049117632
-    vd0 = -0.23746463533725742
-    vq0 = -0.24093479728996403
-    vc0 = 0.0067858958309377155
-    ip0 = 0.07386310406844696
+    wm0 = 2.4917180670524957e-07
+    th0 = 7.068555136133191
+    id0 = 39061870.4649704
+    iq0 = 39059657.728514306
+    vc0 = -2994041.181181343
+    ic0 = -2641369.0284578763
+    vp0 = -2604104.186739992
+    ip0 = 44747.32850412856
     rp0 = 1.0
+
+    Pm0 = 0.0
+    wm0 = 0.0
+    th0 = 0.01
+    id0 = 0.0
+    iq0 = 0.0
+    vc0 = 0.0
+    ic0 = 0.0
+    vp0 = 0.0
+    ip0 = 0.0
+    rp0 = 0.0
 
     # inputs:
 
@@ -1696,6 +1904,9 @@ def shipsys5():
     ed = lambda: efd0 * sin(th.q)
     eq = lambda: efd0 * cos(th.q)
 
+    sq_inv = lambda:  pi / (3 * sqrt(2) * cos(th.q))
+    sd_inv = lambda: -pi / (3 * sqrt(2) * sin(th.q)) 
+
     Pe  = lambda: 3/2 * (ed()*id.q - eq()*iq.q)
     Fd  = lambda: rp.q * ip.q  
     Pdc = lambda: vdc.q * idc.q
@@ -1705,15 +1916,27 @@ def shipsys5():
 
     #did = 1/Ld * (ed - id * Ra - wm * iq * Ld - vd)
 
-    did = lambda: 1/Ld * (ed() - id.q * Ra - wm.q * iq.q * Ld - vd.q)
-    diq = lambda: 1/Lq * (eq() - iq.q * Ra + wm.q * id.q * Lq - vq.q)
     dwm = lambda: 1/M * (Pm.q - Kd*wm.q + Pe())
     dth = lambda: -wm.q * wbase
-    dvd = lambda: 1/Clim * (id.q - ic.q * sd() - vd.q / Rlim) 
-    dvq = lambda: 1/Clim * (iq.q - ic.q * sq() - vq.q / Rlim)
-    dvc = lambda: 1/Cf * (ic.q - ip.q) 
-    dic = lambda: 1/Lf * (vd.q * sd() + vq.q * sq() - ic.q * Rf - vc.q)
-    dip = lambda: 1/Ms * (vc.q - ip.q * rp.q)
+
+    # transformer method #1:
+
+    #did = lambda: 1/Ld * (ed() - id.q * Ra - wm.q * iq.q * Ld - vd.q)
+    #diq = lambda: 1/Lq * (eq() - iq.q * Ra + wm.q * id.q * Lq - vq.q)
+    #dvd = lambda: 1/Clim * (id.q - ic.q * sd() - vd.q / Rlim) 
+    #dvq = lambda: 1/Clim * (iq.q - ic.q * sq() - vq.q / Rlim)
+    #dvc = lambda: 1/Cf * (ic.q - ip.q) 
+    #dic = lambda: 1/Lf * (vd.q * sd() + vq.q * sq() - ic.q * Rf - vc.q)
+    #dip = lambda: 1/Ms * (vc.q - ip.q * rp.q)
+
+    # transformer method #2:
+
+    did = lambda: 1/Ld * (ed() - id.q * Ra - wm.q * iq.q * Ld - vc.q * sd_inv())
+    diq = lambda: 1/Lq * (eq() - iq.q * Ra + wm.q * id.q * Lq - vc.q * sd_inv())
+    dvc = lambda: 2/Cf * (id.q * sd_inv() + iq.q * sq_inv() - ic.q)
+    dic = lambda: 1/Lf * (vc.q - ic.q * Rf - vp.q)
+    dvp = lambda: 2/Cf * (ic.q - ip.q)
+    dip = lambda: 1/Ms * (vp.q - ip.q * rp.q)
 
     dqmin = 0.00001
     dqmax = 0.001
@@ -1736,37 +1959,60 @@ def shipsys5():
     
     dq0 = 0.001
 
-    id = liqss.Atom("id", x0=id0, func=did, units="A",       dq=0.001) # output_scale=ibase)
-    iq = liqss.Atom("iq", x0=iq0, func=diq, units="A",       dq=0.001) # output_scale=ibase)
-    wm = liqss.Atom("wm", x0=wm0, func=dwm, units="RPM",     dq=0.0001) # output_scale=wbase*9.5493)
-    th = liqss.Atom("th", x0=th0, func=dth, units="deg",     dq=0.001) # output_scale=180.0/pi)
-    vd = liqss.Atom("vd", x0=vd0, func=dvd, units="kV",      dq=0.001) # output_scale=vbase*1e-3)
-    vq = liqss.Atom("vq", x0=vq0, func=dvq, units="kV",      dq=0.001) # output_scale=vbase*1e-3)
-    vc = liqss.Atom("vc", x0=vc0, func=dvc, units="kV",      dq=0.001) # output_scale=vbase*1e-3)
-    ic = liqss.Atom("ic", x0=ic0, func=dic, units="A",       dq=0.01) # output_scale=ibase)
-    ip = liqss.Atom("ip", x0=ip0, func=dip, units="knots",   dq=0.001) # output_scale=ibase*1.94384)
+    wm = liqss.Atom("wm", x0=wm0, func=dwm, units="RPM",     dq=dq0) # output_scale=wbase*9.5493)
+    th = liqss.Atom("th", x0=th0, func=dth, units="deg",     dq=dq0) # output_scale=180.0/pi)
+                                                                
+    id = liqss.Atom("id", x0=id0, func=did, units="A",       dq=dq0) # output_scale=ibase)
+    iq = liqss.Atom("iq", x0=iq0, func=diq, units="A",       dq=dq0) # output_scale=ibase)
+    vc = liqss.Atom("vc", x0=vc0, func=dvc, units="kV",      dq=dq0) # output_scale=vbase*1e-3)
+    ic = liqss.Atom("ic", x0=ic0, func=dic, units="A",       dq=dq0) # output_scale=ibase)
+    ip = liqss.Atom("ip", x0=ip0, func=dip, units="knots",   dq=dq0) # output_scale=ibase*1.94384)
 
-    id.connects(th, wm, iq, vd)
-    iq.connects(th, wm, id, vq)
+    # tranformer method # 1:
+
+    #vd = liqss.Atom("vd", x0=vd0, func=dvd, units="kV",      dq=0.001) # output_scale=vbase*1e-3)
+    #vq = liqss.Atom("vq", x0=vq0, func=dvq, units="kV",      dq=0.001) # output_scale=vbase*1e-3)
+    
+    # tranformer method # 2:
+
+    vp = liqss.Atom("vp", x0=vp0, func=dvp, units="kV",    dq=dq0) # , output_scale=vbase*1e-3)
+
     wm.connects(Pm, id, iq, th)
     th.connects(wm)
-    vd.connects(id, ic, th)
-    vq.connects(iq, ic, th)
-    vc.connects(ic, ip)
-    ic.connects(vd, vq, vc)
-    ip.connects(vc, rp)
 
-    sys.add_atoms(Pm, id, iq, wm, th)
-    sys.add_atoms(ic, vd, vq, vc, ic, ip, rp)
+    # transformer method #1:
+
+    #id.connects(th, wm, iq, vd)
+    #iq.connects(th, wm, id, vq)
+    #vd.connects(id, ic, th)
+    #vq.connects(iq, ic, th)
+    #vc.connects(ic, ip)
+    #ic.connects(vd, vq, vc)
+    #ip.connects(vc, rp)
+
+    # transformer method #2:
+
+    id.connects(th, vc, wm, iq)
+    iq.connects(th, vc, wm, id)
+    vc.connects(id, th, ic)
+    ic.connects(vc, vp)
+    vp.connects(ic, ip)
+    ip.connects(vp, rp)
+
+    sys.add_atoms(Pm, wm, th)
+
+    #sys.add_atoms(id, iq, ic, vd, vq, vc, ic, ip, rp)    # transformer method #1
+
+    sys.add_atoms(id, iq, vc, ic, vp, ip, rp)           # transformer method #2
 
     # scenerio 0 (quick test)
 
     if 1:
 
-        tmax = 10.0
+        tmax = 1.0
 
         #sys.initialize()                                                                                
-        #sys.run_to(tmax, verbose=True, fixed_dt=1.0e-4)
+        #sys.run_to(tmax, verbose=True, fixed_dt=1.0e-5)
         #sys.save_data()
 
         sys.initialize()
@@ -1872,7 +2118,7 @@ def shipsys5():
         except:  # or from last qss point:
             f.write("    {}0 = {}\n".format(name, atom.qout[-1]))
 
-        if name in ("id", "iq"): continue
+        #if name in ("id", "iq"): continue
 
         if subplot:
             plt.subplot(r, c, j)
@@ -1914,13 +2160,12 @@ def shipsys5():
     plt.figure()
      
 
-
 if __name__ == "__main__":
 
     #simple()
     #stiffline()
     #delegates()
-    #genset()
+    genset()
     #shipsys()
     #shipsys2()
     #dynphasor()
@@ -1928,4 +2173,4 @@ if __name__ == "__main__":
     #genphasor()
     #shipsys3()
     #shipsys4()
-    shipsys5()
+    #shipsys5()
