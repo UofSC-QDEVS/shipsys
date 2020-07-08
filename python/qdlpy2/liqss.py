@@ -187,6 +187,9 @@ class Atom(object):
 
     def update(self, time):
 
+        if self.time >= 0.1:
+            a = 0
+
         self.time = time
         self.updates += 1
         self.triggered = False
@@ -461,7 +464,7 @@ class Atom(object):
 
             return sqrt(dy_sqrd_sum / y_sqrd_sum)
 
-        elif typ.lower().strip() == "nrmsd":
+        elif typ.lower().strip() == "nrmsd":   # <--- this is what we're using
 
             # calculate the normalized relative root mean squared error:
             #      ________________

@@ -308,17 +308,28 @@ def genset():
         #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
         return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
-    plot_only_mode = 0
+    plot_only_mode = True
 
-    tmax = 6.0
+    tmax = 60.0
 
     plot_files = []
 
-    dq_points = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+    exp0 = -6
+    exp1 = -2
+    npts = 20
 
+    #dq_points = np.logspace(exp0, exp1, num=npts)
+
+    dq_points = [1.0e-4]
+
+    for i in range(npts):
+         plot_files.append("saved_data_dq_{}.pickle".format(i))
+
+    plot_files = ["test.pickle"]
+            
     if not plot_only_mode:
 
-        for dq in dq_points:
+        for i, dq in enumerate(dq_points):
 
             dqmin = dq
             dqmax = dq
@@ -326,13 +337,8 @@ def genset():
             ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
             # machine:
-            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=5.0, t2=20.0, dq=1e2, units="N.m")
-            #tm    = liqss.Atom("tm", source_type=liqss.SourceType.CONSTANT, x0=tm0, units="N.m", dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-            #tm    = liqss.Atom("tm", source_type=liqss.SourceType.STEP, x0=tm0, x1=tm0*1.1, t1=10.0, units="N.m")
+            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e0, units="N.m")
 
-            #dqmin = 1e-4
-            #dqmax = 1e-4
-    
             fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fF    = liqss.Atom("fF",    x0=fF0,    func=dfF,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
@@ -349,7 +355,7 @@ def genset():
             wr.connects(fqr, fdr, fF, fD, fQ, tm)
             theta.connects(wr)
 
-            ship.add_atoms(tm, fdr, fqr, fF, fD, fQ, wr, theta)
+            ship.add_atoms(wr, tm, fdr, fqr, fF, fD, fQ, theta)
 
             # algebraic atoms:
 
@@ -403,72 +409,59 @@ def genset():
                 saved_data[atom.name]["qout2"] = atom.qout2
                 saved_data[atom.name]["error"] = atom.get_error("rpd")
 
-            filename = "saved_data_dq_{}.pickle".format(dq)
-            plot_files.append(filename)
-            f = open(filename, "wb")
+            f = open(plot_files[i], "wb")
             pickle.dump(saved_data, f)
             f.close()
 
-
-    time_plots = False
+    time_plots = True
+    accuracy_time_plots = False
+    accuracy_agg_plots = False
+    accuracy_agg_plots_per_atom = False
 
     if time_plots:
 
-        plot_file = "saved_data.pickle"
+        plot_file = plot_files[0]
 
         f = open(plot_file, "rb")
         saved_data = pickle.load(f)
         f.close()
 
-        # plotting:
-
-        # Plots to create:
-        # 1. Slow dynamic: Machine Speed (rpm)  (T ~= 1-10 sec)
-        # 2. Fast dynamics: fdr and fqr (fluxes)
-        #    a. full 60 sec
-        #    b. Zoom to time range 15.0 - 16.0 
-        # 3. Power plots:
-        #    a. input power: tm * wr (N.m.rad.s^-1 == W) . Output power: abs(p+j*q) (V.A == W)
-        #
-        #  Error plots:
-        #
-
-        # RAD_PER_SEC_2_RPM
-
-        # currents:
-
-        def plot_paper(atom, label, xlim=None, ylim1=None, ylim2=None, scl=1.0, save2file=False, filename=None, order=[0, 1]):
+        def plot_paper(atom, label, show_upd=True, xlim=None, ylim1=None, ylim2=None, scl=1.0, save2file=False, filename=None, order=[0, 1]):
 
             plt.figure()
 
             yax1 = plt.gca()
             yax2 = yax1.twinx()
+
+            width = 1.5
     
             touts, qouts, labels, linestyles = ["tout2", "tout"], ["qout2", "qout"], ["euler", "qss"], ["c--", "b-"]
 
             for idx in order:
                 x = saved_data[atom][touts[idx]]
                 y = [scl*v for v in saved_data[atom][qouts[idx]]]
-                yax1.plot(x, y, linestyles[idx], label=labels[idx], linewidth=1.0)
+                yax1.plot(x, y, linestyles[idx], label=labels[idx], linewidth=width)
 
             if ylim1: yax1.set_ylim(*ylim1)
             yax1.set_ylabel(label)
-            yax1.spines['left'].set_color('blue')
-            yax1.tick_params(axis='y', colors='blue')
-            yax1.yaxis.label.set_color('blue')
 
-            x = saved_data[atom]["tout"]
-            y = saved_data[atom]["nupd"]
-            yax2.plot(x, y, 'r:')
+            if show_upd:
+                yax1.spines['left'].set_color('blue')
+                yax1.tick_params(axis='y', colors='blue')
+                yax1.yaxis.label.set_color('blue')
+                x = saved_data[atom]["tout"]
+                y = saved_data[atom]["nupd"]
+                yax2.plot(x, [yy*1e-4 for yy in y], 'r:', linewidth=width)
 
-            if ylim2: yax2.set_ylim(*ylim2)
-            yax2.set_ylabel("qss updates (cummulative)")
-            yax2.spines['right'].set_color('red')
-            yax2.tick_params(axis='y', colors='red')
-            yax2.yaxis.label.set_color('red')
+                if ylim2: yax2.set_ylim(*ylim2)
+                yax2.set_ylabel("qss updates x $10^4$ (cummulative)")
+                yax2.spines['right'].set_color('red')
+                yax2.tick_params(axis='y', colors='red')
+                yax2.yaxis.label.set_color('red')
+
 
             if xlim: plt.xlim(*xlim)
-            plt.xlabel("t (s)")
+            yax1.set_xlabel("t (s)")
 
             yax1.grid()
         
@@ -482,23 +475,41 @@ def genset():
             else:
                 plt.show()
 
+        xlim = [0, 40]
 
-        #plot_paper("fdr", r"$\phi_{dr} (Wb)$", xlim=(14.9, 16.1), ylim1=(63, 64), ylim2=(0, 150000))
-        #plot_paper("fqr", r"$\phi_{qr} (Wb)$", xlim=(14.9, 16.1), ylim1=(-1, 9), ylim2=(0, 200000), scl=-1)
+        # states:
 
-        plot_paper("fdr", r"$\phi_{dr} (Wb)$", save2file=False, filename="fdr_full_dq_1e-7.pdf", order=[1, 0])
-        plot_paper("wr", r"$\omega_{r} (rad/s)$", save2file=False, filename="wr_full_dq_1e-7.pdf", order=[1, 0])
+        #plot_paper("fdr",   r"$\Phi_{dr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fdr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
+        #plot_paper("fqr",   r"$\Phi_{qr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fqr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
+        #plot_paper("fF",    r"$\Phi_{F} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fF_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        #plot_paper("fD",    r"$\Phi_{D} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fD_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        #plot_paper("fQ",    r"$\Phi_{Q} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fQ_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        #plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=True, save2file=False, filename=r"plots\wr_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        #plot_paper("theta", r"$\theta (rad)$",       show_upd=True, save2file=False, filename=r"plots\theta _full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
 
-    accuracy_time_plots = False
-    accuracy_agg_plots = True
+        # derived plots without updates:
 
-    plot_files = ["saved_data_dq_0.01.pickle", "saved_data_dq_0.001.pickle", "saved_data_dq_0.0001.pickle", "saved_data_dq_1e-05.pickle", "saved_data_dq_1e-06.pickle"]
+        plot_paper("vd", r"$\nu_d (V)$", show_upd=False, save2file=True, filename=r"plots\vd_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("vq", r"$\nu_q (V)$", show_upd=False, save2file=True, filename=r"plots\vq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("id", r"$i_d (A)$", show_upd=False,   save2file=True, filename=r"plots\id_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("iq", r"$i_q (A)$", show_upd=False,   save2file=True, filename=r"plots\iq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+
 
     if accuracy_time_plots:
 
         plt.figure()
 
-        for plot_file in plot_files:
+        j = 0
+
+        styles = ["solid", "dashed", "dotted"]
+        widths = [1, 1, 3]
+        colors = ["blue", "red", "green"]
+
+        for i in [19, 14, 0]:    # -6, ~-3, -2
+
+            dq_point = dq_points[i]
+
+            plot_file = plot_files[i]
 
             f = open(plot_file, "rb")
             saved_data = pickle.load(f)
@@ -507,12 +518,23 @@ def genset():
             x = saved_data["fdr"]["tout2"]
             y = saved_data["fdr"]["error"]
 
-            plt.plot(x, y, label=plot_file)
+            lbl = r"$\phi_{dr}\:\Delta Q\:=" + " {:4.2e}".format(dq_point) + "$"
 
-        plt.legend()
+            plt.plot(x, y, label=lbl, linestyle=styles[j], linewidth=widths[j], color=colors[j])
+            j += 1
+
+        plt.grid()
+        plt.ylabel("Error (%)")
+        plt.xlabel("t (s)")
+        plt.xlim([1.0, 1.5])
+        plt.ylim([-0.1, 1.1])
+        plt.legend(loc="upper left")
         plt.show()
 
-    def agg_error(atom):
+    def nrmsd(atom):
+
+        """get normalized relative root mean squared error (%)
+        """
 
         qout_interp = np.interp(saved_data[atom]["tout2"], saved_data[atom]["tout"], saved_data[atom]["qout"])
 
@@ -523,29 +545,119 @@ def genset():
             dy_sqrd_sum += (y - q)**2
             y_sqrd_sum += y**2
 
-        return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(saved_data[atom]["qout2"]) - min(saved_data[atom]["qout2"]))
+        rng = max(saved_data[atom]["qout2"]) - min(saved_data[atom]["qout2"])
+
+        if rng:
+            rslt = sqrt(dy_sqrd_sum / len(qout_interp)) / rng
+        else:
+            rslt = 0.0
+
+        return rslt
 
     if accuracy_agg_plots:
 
         plt.figure()
 
+        yax1 = plt.gca()
+        yax2 = yax1.twinx()
+
+        x = dq_points[:9]
+
+        atoms = ["fdr", "fqr", "fF", "fD", "fQ", "wr", "theta"]
+
+        yerror = []
+
+        yupdates = []
+
+        for plot_file in plot_files[:9]:   # dq dimension
+
+            f = open(plot_file, "rb")
+            saved_data = pickle.load(f)
+            f.close()
+
+            atom_error_norms = []
+            atom_updates = []
+
+            for atom in atoms:  # atom dimension
+
+                atom_error_norms.append(nrmsd(atom))
+                atom_updates.append(saved_data[atom]["nupd"][-1])
+
+            yerror.append(max(atom_error_norms))
+            yupdates.append(sum(atom_updates))
+
+        yax1.loglog(x, yerror, "b.-", label="Maximum Error")
+        yax2.loglog(x, yupdates, "r.--", label="Total updates")
+
+        yax1.set_ylabel("Error (%)")
+        yax1.spines['left'].set_color('blue')
+        yax1.tick_params(axis='y', colors='blue')
+        yax1.yaxis.label.set_color('blue')
+
+        yax2.set_ylabel("Updates")
+        yax2.spines['right'].set_color('red')
+        yax2.tick_params(axis='y', colors='red')
+        yax2.yaxis.label.set_color('red')
+
+
+        lines, labels = yax1.get_legend_handles_labels()
+        lines2, labels2 = yax2.get_legend_handles_labels()
+        yax2.legend(lines + lines2, labels + labels2, loc=0)
+
+        yax1.set_xlabel(r"$\Delta Q$")
+        plt.show()
+
+    if accuracy_agg_plots_per_atom:
+
+        plt.figure()
+
+        yax1 = plt.gca()
+        yax2 = yax1.twinx()
+
         x = dq_points
 
-        for atom in ["fdr", "fqr"]:
+        atoms = ["fdr", "fqr", "fF", "fD", "fQ", "wr", "theta"]
 
-            y = []
+        yerror = []
 
-            for plot_file in plot_files:
+        yupdates = []
 
-                f = open(plot_file, "rb")
-                saved_data = pickle.load(f)
-                f.close()
+        atom_error_norms = {}
+        atom_updates = {}
 
-                y.append(agg_error(atom))
+        for plot_file in plot_files[:11]:   # dq dimension
 
-            plt.loglog(x, y, label=atom)
+            f = open(plot_file, "rb")
+            saved_data = pickle.load(f)
+            f.close()
 
-        plt.legend()
+            for atom in atoms:  # atom dimension
+
+                if not atom in atom_error_norms: atom_error_norms[atom] = []
+                if not atom in atom_updates: atom_updates[atom] = []
+
+                atom_error_norms[atom].append(nrmsd(atom))
+                atom_updates[atom].append(saved_data[atom]["nupd"][-1])
+
+        for atom in atoms:
+            yax1.loglog(x, atom_error_norms[atom], linestyle="solid", label="{} error".format(atom))
+            yax2.loglog(x, atom_updates[atom], linestyle="dashed", label="{} updates".format(atom))
+
+        yax1.set_ylabel("Error (%)")
+        yax1.spines['left'].set_color('blue')
+        yax1.tick_params(axis='y', colors='blue')
+        yax1.yaxis.label.set_color('blue')
+
+        yax2.set_ylabel("Updates")
+        yax2.spines['right'].set_color('red')
+        yax2.tick_params(axis='y', colors='red')
+        yax2.yaxis.label.set_color('red')
+
+        lines, labels = yax1.get_legend_handles_labels()
+        lines2, labels2 = yax2.get_legend_handles_labels()
+        yax2.legend(lines + lines2, labels + labels2, loc=0)
+
+
         plt.show()
             
 
