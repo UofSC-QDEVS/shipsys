@@ -310,7 +310,9 @@ def genset():
 
     plot_only_mode = True
 
-    tmax = 60.0
+    tmax = 2.0
+
+    euler_dt = 1.0e-3
 
     plot_files = []
 
@@ -318,15 +320,15 @@ def genset():
     exp1 = -2
     npts = 20
 
-    #dq_points = np.logspace(exp0, exp1, num=npts)
-
-    dq_points = [1.0e-4]
+    dq_points = np.logspace(exp0, exp1, num=npts)
 
     for i in range(npts):
          plot_files.append("saved_data_dq_{}.pickle".format(i))
+   
+    # for zoom plots:
+    #dq_points = [1.0e-4]
+    #plot_files = ["test.pickle"]
 
-    plot_files = ["test.pickle"]
-            
     if not plot_only_mode:
 
         for i, dq in enumerate(dq_points):
@@ -337,7 +339,7 @@ def genset():
             ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
             # machine:
-            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e0, units="N.m")
+            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=1.0, t2=6.0, dq=1e0, units="N.m")
 
             fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
@@ -385,7 +387,7 @@ def genset():
             # state space simulation:
 
             ship.initialize()
-            ship.run_to(tmax, fixed_dt=1e-3)
+            ship.run_to(tmax, fixed_dt=euler_dt)
             ship.save_data()
 
             # qdl simulation:
@@ -431,7 +433,6 @@ def genset():
             plt.figure()
 
             yax1 = plt.gca()
-            yax2 = yax1.twinx()
 
             width = 1.5
     
@@ -446,14 +447,18 @@ def genset():
             yax1.set_ylabel(label)
 
             if show_upd:
+
                 yax1.spines['left'].set_color('blue')
                 yax1.tick_params(axis='y', colors='blue')
                 yax1.yaxis.label.set_color('blue')
                 x = saved_data[atom]["tout"]
                 y = saved_data[atom]["nupd"]
+
+                yax2 = yax1.twinx()
                 yax2.plot(x, [yy*1e-4 for yy in y], 'r:', linewidth=width)
 
                 if ylim2: yax2.set_ylim(*ylim2)
+
                 yax2.set_ylabel("qss updates x $10^4$ (cummulative)")
                 yax2.spines['right'].set_color('red')
                 yax2.tick_params(axis='y', colors='red')
@@ -479,20 +484,20 @@ def genset():
 
         # states:
 
-        #plot_paper("fdr",   r"$\Phi_{dr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fdr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
-        #plot_paper("fqr",   r"$\Phi_{qr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fqr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
-        #plot_paper("fF",    r"$\Phi_{F} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fF_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        #plot_paper("fD",    r"$\Phi_{D} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fD_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        #plot_paper("fQ",    r"$\Phi_{Q} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fQ_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        #plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=True, save2file=False, filename=r"plots\wr_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        #plot_paper("theta", r"$\theta (rad)$",       show_upd=True, save2file=False, filename=r"plots\theta _full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fdr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
+        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fqr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
+        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fF_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fD_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fQ_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=True, save2file=False, filename=r"plots\wr_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("theta", r"$\theta (rad)$",       show_upd=True, save2file=False, filename=r"plots\theta _full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
 
         # derived plots without updates:
 
-        plot_paper("vd", r"$\nu_d (V)$", show_upd=False, save2file=True, filename=r"plots\vd_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
-        plot_paper("vq", r"$\nu_q (V)$", show_upd=False, save2file=True, filename=r"plots\vq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
-        plot_paper("id", r"$i_d (A)$", show_upd=False,   save2file=True, filename=r"plots\id_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
-        plot_paper("iq", r"$i_q (A)$", show_upd=False,   save2file=True, filename=r"plots\iq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("vd", r"$\nu_d (V)$", show_upd=False, save2file=False, filename=r"plots\vd_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("vq", r"$\nu_q (V)$", show_upd=False, save2file=False, filename=r"plots\vq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("id", r"$i_d (A)$",   show_upd=False, save2file=False, filename=r"plots\id_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("iq", r"$i_q (A)$",   show_upd=False, save2file=False, filename=r"plots\iq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
 
 
     if accuracy_time_plots:

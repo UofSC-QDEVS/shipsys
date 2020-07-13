@@ -775,11 +775,15 @@ class Module(object):
 
         if fixed_dt:
             dt = fixed_dt
+            i = 0
             while(self.time < self.tstop):
                 for atom in self.atoms.values():
                     atom.step(self.time)
                     atom.save()
-                print("t = {0:5.2f} s".format(self.time))
+                if i >= 100: 
+                    print("t = {0:5.2f} s".format(self.time))
+                    i = 0
+                i += 1
                 self.time += dt
             return
 
