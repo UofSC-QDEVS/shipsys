@@ -11,7 +11,6 @@ import pickle
 
 RAD_PER_SEC_2_RPM = 9.5492965964254
 
-
 def simple():
 
     sys = liqss.Module("simple")
@@ -428,23 +427,33 @@ def genset():
         saved_data = pickle.load(f)
         f.close()
 
-        def plot_paper(atom, label, show_upd=True, xlim=None, ylim1=None, ylim2=None, scl=1.0, save2file=False, filename=None, order=[0, 1]):
+        def plot_paper(atom, label, show_upd=True, xlim=None, ylim1=None, ylim2=None, scl=1.0, save2file=False, filename=None, order=[0, 1], multilabel="", holdstart=False, holdend=False, lstyle=None):
 
-            plt.figure()
+            if not holdend: plt.figure()
 
             yax1 = plt.gca()
 
             width = 1.5
     
-            touts, qouts, labels, linestyles = ["tout2", "tout"], ["qout2", "qout"], ["euler", "qss"], ["c--", "b-"]
+            linestyles = ["c--", "b-"]
+            if lstyle: linestyles = lstyle
+            touts, qouts, labels = ["tout2", "tout"], ["qout2", "qout"], ["euler", "qss"]
 
             for idx in order:
                 x = saved_data[atom][touts[idx]]
                 y = [scl*v for v in saved_data[atom][qouts[idx]]]
-                yax1.plot(x, y, linestyles[idx], label=labels[idx], linewidth=width)
+
+                if holdstart or holdend:
+                    yax1.plot(x, y, linestyles[idx], label="{} ({})".format(label, labels[idx]), linewidth=width)
+                else:
+                    yax1.plot(x, y, linestyles[idx], label=labels[idx], linewidth=width)
 
             if ylim1: yax1.set_ylim(*ylim1)
-            yax1.set_ylabel(label)
+
+            if holdstart or holdend:
+                yax1.set_ylabel(multilabel)
+            else:
+                yax1.set_ylabel(label)
 
             if show_upd:
 
@@ -468,36 +477,37 @@ def genset():
             if xlim: plt.xlim(*xlim)
             yax1.set_xlabel("t (s)")
 
-            yax1.grid()
+            if not holdstart: yax1.grid()
         
-            if len(order) > 1: yax1.legend()
+            if len(order) > 1 and not holdstart: yax1.legend()
     
-            if save2file:
+            if save2file and not holdstart:
                 if filename:
                     plt.savefig(filename)
                 else:
                     plt.savefig("{}.pdf".format(atom))
-            else:
+            
+            if not holdstart:
                 plt.show()
 
         xlim = [0, 40]
 
         # states:
 
-        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fdr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
-        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=True, save2file=False, filename=r"plots\fqr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
-        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fF_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fD_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=True, save2file=False, filename=r"plots\fQ_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=True, save2file=False, filename=r"plots\wr_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("theta", r"$\theta (rad)$",       show_upd=True, save2file=False, filename=r"plots\theta _full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=False, save2file=True, filename=r"plots\fdr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim, lstyle=["c--", "b.-"])
+        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=False, save2file=True, filename=r"plots\fqr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
+        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=False, save2file=True, filename=r"plots\fF_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=False, save2file=True, filename=r"plots\fD_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=False, save2file=True, filename=r"plots\fQ_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=False, save2file=True, filename=r"plots\wr_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("theta", r"$\theta (rad)$",       show_upd=False, save2file=True, filename=r"plots\theta _full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
 
         # derived plots without updates:
 
-        plot_paper("vd", r"$\nu_d (V)$", show_upd=False, save2file=False, filename=r"plots\vd_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
-        plot_paper("vq", r"$\nu_q (V)$", show_upd=False, save2file=False, filename=r"plots\vq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
-        plot_paper("id", r"$i_d (A)$",   show_upd=False, save2file=False, filename=r"plots\id_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
-        plot_paper("iq", r"$i_q (A)$",   show_upd=False, save2file=False, filename=r"plots\iq_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        #plot_paper("vd", r"$\nu_d\:$", show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="v (V)")
+        #plot_paper("vq", r"$\nu_q\:$", show_upd=False, save2file=True, filename=r"plots\volts_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="v (V)", lstyle=["y--", "r-"])
+        #plot_paper("id", r"$i_d\:$",   show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="i (A)")
+        #plot_paper("iq", r"$i_q\:$",   show_upd=False, save2file=True, filename=r"plots\currents_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="i (A)", lstyle=["y--", "r-"])
 
 
     if accuracy_time_plots:
