@@ -309,7 +309,7 @@ def genset():
 
     plot_only_mode = True
 
-    tmax = 2.0
+    tmax = 40.0
 
     euler_dt = 1.0e-3
 
@@ -324,8 +324,10 @@ def genset():
     for i in range(npts):
          plot_files.append("saved_data_dq_{}.pickle".format(i))
    
+    # for fixed dq:
+    dq_points = [1.0e-5]
+
     # for zoom plots:
-    #dq_points = [1.0e-4]
     #plot_files = ["test.pickle"]
 
     if not plot_only_mode:
@@ -338,7 +340,7 @@ def genset():
             ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
             # machine:
-            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=1.0, t2=6.0, dq=1e0, units="N.m")
+            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e-1, units="N.m")
 
             fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
@@ -494,20 +496,23 @@ def genset():
 
         # states:
 
-        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=False, save2file=True, filename=r"plots\fdr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim, lstyle=["c--", "b.-"])
-        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=False, save2file=True, filename=r"plots\fqr_full_dq_1e-4.pdf",     order=[1, 0], xlim=xlim)
-        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=False, save2file=True, filename=r"plots\fF_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=False, save2file=True, filename=r"plots\fD_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=False, save2file=True, filename=r"plots\fQ_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=False, save2file=True, filename=r"plots\wr_full_dq_1e-4.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("theta", r"$\theta (rad)$",       show_upd=False, save2file=True, filename=r"plots\theta _full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim)
+        show_upd = False
+        save2file = False
+
+        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=show_upd, save2file=save2file, filename=r"plots\fdr_full_dq_1e-5.pdf",     order=[1, 0], xlim=xlim)
+        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=show_upd, save2file=save2file, filename=r"plots\fqr_full_dq_1e-5.pdf",     order=[1, 0], xlim=xlim)
+        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fF_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fD_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fQ_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=show_upd, save2file=save2file, filename=r"plots\wr_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
+        plot_paper("theta", r"$\theta (rad)$",       show_upd=show_upd, save2file=save2file, filename=r"plots\theta _full_dq_1e-5.pdf",  order=[1, 0], xlim=xlim)
 
         # derived plots without updates:
 
-        #plot_paper("vd", r"$\nu_d\:$", show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="v (V)")
-        #plot_paper("vq", r"$\nu_q\:$", show_upd=False, save2file=True, filename=r"plots\volts_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="v (V)", lstyle=["y--", "r-"])
-        #plot_paper("id", r"$i_d\:$",   show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="i (A)")
-        #plot_paper("iq", r"$i_q\:$",   show_upd=False, save2file=True, filename=r"plots\currents_full_dq_1e-4.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="i (A)", lstyle=["y--", "r-"])
+        plot_paper("vd", r"$\nu_d\:$", show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="v (V)")
+        plot_paper("vq", r"$\nu_q\:$", show_upd=False, save2file=True, filename=r"plots\volts_full_dq_1e-5.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="v (V)", lstyle=["y--", "r-"])
+        plot_paper("id", r"$i_d\:$",   show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="i (A)")
+        plot_paper("iq", r"$i_q\:$",   show_upd=False, save2file=True, filename=r"plots\currents_full_dq_1e-5.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="i (A)", lstyle=["y--", "r-"])
 
 
     if accuracy_time_plots:
