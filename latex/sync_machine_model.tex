@@ -1,0 +1,74 @@
+
+\documentclass{article}
+
+% packages:
+\usepackage{latexsym}
+\usepackage{graphicx}
+\usepackage{mathptmx}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{amsbsy}
+\usepackage{amsthm}
+\usepackage{listings}
+\usepackage{bm}
+\usepackage[section]{placeins}
+
+
+\begin{document}
+
+
+\section{Synchronous Machine Model} 
+
+
+\begin{equation}  \label{eq:sync1}
+u_f = \nu_f + \Delta \nu_f = \nu_f + L_l \frac{d}{dt} i_f
+\end{equation}
+
+
+\begin{equation}  \label{eq:sync2}
+\frac{d}{dt} \psi^r_d = u^r_d - L_l \frac{d}{dt} i^r_d + \omega_m L_l i^r_q - R_s i^r_d + \omega_m \psi^r_q
+\end{equation}
+
+
+\begin{equation}  \label{eq:sync3}
+\frac{d}{dt} \psi^r_q = u^r_q - L_l \frac{d}{dt} i^r_q - \omega_m L_l i^r_d - R_s i^r_q + \omega_m \psi^r_d
+\end{equation}
+
+
+\begin{equation} \label{eq:sync4}
+\begin{bmatrix}
+\psi_d \\
+\psi_F \\
+\psi_D
+\end{bmatrix}
+= 
+\begin{bmatrix}
+L_d + L_l  &  M_F        &  M_D     \\
+M_F        &  L^{'}_{F}  &  M_{FD}  \\
+M_D        &  M_{FD}     &  L^{'}_D  
+\end{bmatrix}
+\begin{bmatrix}
+i^r_d \\
+i_F   \\
+i_D   
+\end{bmatrix}
+\end{equation}
+
+\begin{equation} \label{eq:sync5}
+\begin{bmatrix}
+\psi_q \\
+\psi_Q
+\end{bmatrix}
+= 
+\begin{bmatrix}
+L_q + L_l  &  M_Q       \\   
+M_Q        &  L^{'}_{Q}
+\end{bmatrix}
+\begin{bmatrix}
+i^r_q \\
+i_Q   
+\end{bmatrix}
+\end{equation}
+
+\end{document}
