@@ -11,6 +11,8 @@ import pickle
 
 RAD_PER_SEC_2_RPM = 9.5492965964254
 
+save_data = None
+
 def simple():
 
     sys = liqss.Module("simple")
@@ -307,9 +309,12 @@ def genset():
         #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
         return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
-    plot_only_mode = True
+    plot_only_mode = False
 
-    tmax = 40.0
+    speed_only_dq_sweep = True
+    dq0 = 1e-2
+
+    tmax = 2.0
 
     euler_dt = 1.0e-3
 
@@ -325,7 +330,7 @@ def genset():
          plot_files.append("saved_data_dq_{}.pickle".format(i))
    
     # for fixed dq:
-    dq_points = [1.0e-5]
+    #dq_points = [1.0e-5]
 
     # for zoom plots:
     #plot_files = ["test.pickle"]
@@ -334,20 +339,29 @@ def genset():
 
         for i, dq in enumerate(dq_points):
 
-            dqmin = dq
-            dqmax = dq
+            if speed_only_dq_sweep:
+                dqmin = dq0
+                dqmax = dq0
+            else:
+                dqmin = dq
+                dqmax = dq
 
             ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
             # machine:
-            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e-1, units="N.m")
+            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=1.0, t2=6.0, dq=1e-1, units="N.m")
 
             fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fF    = liqss.Atom("fF",    x0=fF0,    func=dfF,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fD    = liqss.Atom("fD",    x0=fD0,    func=dfD,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fQ    = liqss.Atom("fQ",    x0=fQ0,    func=dfQ,    units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
-            wr    = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dqmin*0.1, dqmax=dqmax*0.1, dqerr=dqerr)
+            
+            if not speed_only_dq_sweep:
+                wr = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dqmin*0.1, dqmax=dqmax*0.1, dqerr=dqerr)
+            else:
+                wr = liqss.Atom("wr",    x0=wr0,    func=dwr,    units="rad/s", dqmin=dq, dqmax=dq, dqerr=dqerr)
+
             theta = liqss.Atom("theta", x0=theta0, func=dtheta, units="rad",   dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
             fdr.connects(fqr, fF, fD, wr, theta)
@@ -416,10 +430,35 @@ def genset():
             pickle.dump(saved_data, f)
             f.close()
 
-    time_plots = True
+    def nrmsd(atom):
+
+        """get normalized relative root mean squared error (%)
+        """
+
+        qout_interp = np.interp(saved_data[atom]["tout2"], saved_data[atom]["tout"], saved_data[atom]["qout"])
+
+        dy_sqrd_sum = 0.0
+        y_sqrd_sum = 0.0
+
+        for q, y in zip(qout_interp, saved_data[atom]["qout2"]):
+            dy_sqrd_sum += (y - q)**2
+            y_sqrd_sum += y**2
+
+        rng = max(saved_data[atom]["qout2"]) - min(saved_data[atom]["qout2"])
+
+        if rng:
+            rslt = sqrt(dy_sqrd_sum / len(qout_interp)) / rng
+        else:
+            rslt = 0.0
+
+        return rslt
+
+    time_plots = False
+    time_dq_sens_plots = False
     accuracy_time_plots = False
     accuracy_agg_plots = False
     accuracy_agg_plots_per_atom = False
+    speed_only_err_sens = True
 
     if time_plots:
 
@@ -515,6 +554,85 @@ def genset():
         plot_paper("iq", r"$i_q\:$",   show_upd=False, save2file=True, filename=r"plots\currents_full_dq_1e-5.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="i (A)", lstyle=["y--", "r-"])
 
 
+    if time_dq_sens_plots:
+
+        plt.figure()
+
+        colors = ["red", "blue", "green"]
+
+        f = open(plot_files[0], "rb")
+        saved_data = pickle.load(f)
+        f.close()
+
+        x = [t+14 for t in saved_data["wr"]["tout2"]]
+        y = saved_data["wr"]["qout2"]
+
+        plt.plot(x, y, 'k--', label="euler")
+
+        for i, plot_file in enumerate(plot_files):
+
+            if i > 0:
+                f = open(plot_file, "rb")
+                saved_data = pickle.load(f)
+                f.close()
+
+            x = [t+14 for t in saved_data["wr"]["tzoh"]]
+            y = saved_data["wr"]["qzoh"]
+
+            label = "qss ($\Delta Q\:=$ {})".format(dq_points[i])
+
+            plt.plot(x, y, color=colors[i], label=label)
+
+        plt.xlabel("t (s)")
+        plt.xlim([14.0, 16.0])
+        plt.ylabel("$\omega_{r}$ (rad/s)")
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+    if speed_only_err_sens:
+
+        global save_data
+        
+        plt.figure()
+
+        yax1 = plt.gca()
+        yax2 = yax1.twinx()
+
+        x = dq_points
+
+        yerrors = []
+        yupdates = []
+
+        for plot_file in plot_files:   # dq dimension
+
+            f = open(plot_file, "rb")
+            saved_data = pickle.load(f)
+            f.close()
+
+            yerrors.append(nrmsd("wr"))
+            yupdates.append(saved_data["wr"]["nupd"][-1])
+
+        yax1.loglog(x, yerrors, "b.-", label="Relative Error")
+        yax2.loglog(x, yupdates, "r.--", label="Total updates")
+
+        yax1.set_ylabel("$\omega_{r}$ rel. error (%)")
+        yax1.spines['left'].set_color('blue')
+        yax1.tick_params(axis='y', colors='blue')
+        yax1.yaxis.label.set_color('blue')
+
+        yax2.set_ylabel("Updates")
+        yax2.spines['right'].set_color('red')
+        yax2.tick_params(axis='y', colors='red')
+        yax2.yaxis.label.set_color('red')
+
+        lines, labels = yax1.get_legend_handles_labels()
+        lines2, labels2 = yax2.get_legend_handles_labels()
+        yax2.legend(lines + lines2, labels + labels2, loc=0)
+
+        yax1.set_xlabel(r"$\Delta Q$")
+        plt.show()
+
     if accuracy_time_plots:
 
         plt.figure()
@@ -550,29 +668,6 @@ def genset():
         plt.ylim([-0.1, 1.1])
         plt.legend(loc="upper left")
         plt.show()
-
-    def nrmsd(atom):
-
-        """get normalized relative root mean squared error (%)
-        """
-
-        qout_interp = np.interp(saved_data[atom]["tout2"], saved_data[atom]["tout"], saved_data[atom]["qout"])
-
-        dy_sqrd_sum = 0.0
-        y_sqrd_sum = 0.0
-
-        for q, y in zip(qout_interp, saved_data[atom]["qout2"]):
-            dy_sqrd_sum += (y - q)**2
-            y_sqrd_sum += y**2
-
-        rng = max(saved_data[atom]["qout2"]) - min(saved_data[atom]["qout2"])
-
-        if rng:
-            rslt = sqrt(dy_sqrd_sum / len(qout_interp)) / rng
-        else:
-            rslt = 0.0
-
-        return rslt
 
     if accuracy_agg_plots:
 
@@ -618,7 +713,6 @@ def genset():
         yax2.spines['right'].set_color('red')
         yax2.tick_params(axis='y', colors='red')
         yax2.yaxis.label.set_color('red')
-
 
         lines, labels = yax1.get_legend_handles_labels()
         lines2, labels2 = yax2.get_legend_handles_labels()
