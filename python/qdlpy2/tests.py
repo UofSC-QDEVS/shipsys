@@ -309,10 +309,10 @@ def genset():
         #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
         return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
-    plot_only_mode = False
+    plot_only_mode = True
 
     speed_only_dq_sweep = True
-    dq0 = 1e-2
+    dq0 = 1e-4
 
     tmax = 2.0
 
@@ -320,8 +320,8 @@ def genset():
 
     plot_files = []
 
-    exp0 = -6
-    exp1 = -2
+    exp0 = -7
+    exp1 = -1
     npts = 20
 
     dq_points = np.logspace(exp0, exp1, num=npts)
@@ -613,10 +613,10 @@ def genset():
             yerrors.append(nrmsd("wr"))
             yupdates.append(saved_data["wr"]["nupd"][-1])
 
-        yax1.loglog(x, yerrors, "b.-", label="Relative Error")
-        yax2.loglog(x, yupdates, "r.--", label="Total updates")
+        yax1.loglog(x, yerrors, "b.-", label="$\omega_{r}\:$ atom relative error")
+        yax2.loglog(x, yupdates, "r.--", label="$\omega_{r}\:$ atom total updates")
 
-        yax1.set_ylabel("$\omega_{r}$ rel. error (%)")
+        yax1.set_ylabel("Error (%)")
         yax1.spines['left'].set_color('blue')
         yax1.tick_params(axis='y', colors='blue')
         yax1.yaxis.label.set_color('blue')
@@ -631,6 +631,9 @@ def genset():
         yax2.legend(lines + lines2, labels + labels2, loc=0)
 
         yax1.set_xlabel(r"$\Delta Q$")
+
+        plt.xlim([1e-7, 1e-2])
+
         plt.show()
 
     if accuracy_time_plots:
