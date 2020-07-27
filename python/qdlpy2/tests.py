@@ -310,24 +310,24 @@ def genset():
         return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
     plot_only_mode = True
+    speed_only_dq_sweep = False
 
-    speed_only_dq_sweep = True
     dq0 = 1e-4
 
-    tmax = 2.0
+    tmax = 40.0
 
     euler_dt = 1.0e-3
 
     plot_files = []
 
-    exp0 = -7
-    exp1 = -1
-    npts = 20
+    exp0 = -5
+    exp1 = -3
+    npts = 3
 
     dq_points = np.logspace(exp0, exp1, num=npts)
 
     for i in range(npts):
-         plot_files.append("saved_data_dq_{}.pickle".format(i))
+         plot_files.append("saved_data_dq_{}_b.pickle".format(i))
    
     # for fixed dq:
     #dq_points = [1.0e-5]
@@ -349,7 +349,7 @@ def genset():
             ship = liqss.Module("genset", print_time=True, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
 
             # machine:
-            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=1.0, t2=6.0, dq=1e-1, units="N.m")
+            tm    = liqss.Atom("tm", source_type=liqss.SourceType.RAMP, x1=0.0, x2=Tm_max, t1=15.0, t2=20.0, dq=1e-1, units="N.m")
 
             fdr   = liqss.Atom("fdr",   x0=fdr0,   func=dfdr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
             fqr   = liqss.Atom("fqr",   x0=fqr0,   func=dfqr,   units="Wb",    dqmin=dqmin, dqmax=dqmax, dqerr=dqerr)
@@ -454,11 +454,11 @@ def genset():
         return rslt
 
     time_plots = False
-    time_dq_sens_plots = False
+    time_dq_sens_plots = True
     accuracy_time_plots = False
     accuracy_agg_plots = False
     accuracy_agg_plots_per_atom = False
-    speed_only_err_sens = True
+    speed_only_err_sens = False
 
     if time_plots:
 
@@ -513,7 +513,6 @@ def genset():
                 yax2.spines['right'].set_color('red')
                 yax2.tick_params(axis='y', colors='red')
                 yax2.yaxis.label.set_color('red')
-
 
             if xlim: plt.xlim(*xlim)
             yax1.set_xlabel("t (s)")
@@ -584,7 +583,7 @@ def genset():
             plt.plot(x, y, color=colors[i], label=label)
 
         plt.xlabel("t (s)")
-        plt.xlim([14.0, 16.0])
+        #plt.xlim([14.0, 16.0])
         plt.ylabel("$\omega_{r}$ (rad/s)")
         plt.legend()
         plt.grid()
