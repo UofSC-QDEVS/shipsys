@@ -812,7 +812,7 @@ class Module(object):
 
         while self.time < self.tstop:
             self.advance()
-            if verbose and self.time-last_print_time > 0.01:
+            if verbose and self.time-last_print_time > 0.1:
                 print("t = {0:5.2f} s".format(self.time))
                 last_print_time = self.time
             tlast = self.time

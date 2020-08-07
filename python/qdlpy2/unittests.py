@@ -1,9 +1,25 @@
+"""
+
+Getting number for Cruiser level
+
+1. Ship Speed (m/s) at steady state? Normal mission, fast?   (~40 kn, or ~20 m/s)
+2. Mass of the ship (kg), order of magnitude?  (10,000 Tons ~10,000 metric tons)
+3. Power of the Gensets (MW) (2 units x 36 MW each)
+4. Nominal DC Bus Voltage (V) ? 12 kVdc
+5. Drag? or at least efficency of ship? (power lost to drag (2 x 18 MW)
+6. Hotel + other loads 2 x 10 MW
+
+"""
+
 
 import os
 from math import pi, sin, cos, atan2, sqrt, floor
 from matplotlib import pyplot as plt
 
 import liqss
+
+
+
 
 
 def plot(*atoms, plot_updates=False):
@@ -56,7 +72,7 @@ def xfmr2winding():
 
     """
 
-    E1 = 10.0
+    E1 = 500.0
     R1 = 0.05
     L1 = 0.01
     C1 = 0.01
@@ -88,15 +104,68 @@ def xfmr2winding():
     plot(*sys.atoms.values(), plot_updates=True)
 
 
-def xfmr3winding():
+def propulsion():
+
+    """
+                             
+             R1   L1             
+        .----VVV--UUU----.                    .--------.------------.
+        |     ---->      |                    |        |            |           +
+     + ,-.      i1      /+\ v2*K1            /^\      [ ]          _|_          
+ Vdc  (   )            (   )          i1*K2 ( | )     [ ] D2       ___ M2      v2 (velocity)
+       `-'              \-/        (thrust)  \ /      [ ] (drag)    |  (mass) 
+        |                |                    |        |            |           -
+        '----------------'                    +--------+------------'
+                                             _|_
+                                              -
+    Vdc = i1*R1 + di1*L1 + v2*K1
+    i1*K2 = v2*D + dv2*M
+
+    di1 = 1/L1 * (Vdc - i1*R1 - v2*K1)
+    dv2 = 1/M * (i1*K2 - v2*D)
 
     """
 
+    Vdc = 500.0
+    R1 = 0.01
+    L1 = 0.01
+
+    M2 = 1.0e3
+    D2 = 0.1
+
+    K1 = 1.0
+    K2 = 1.0
+
+    dq0 = 1.0
+
+    di1 = lambda: 1/L1 * (Vdc - i1.q*R1 - v2.q*K1)
+    dv2 = lambda: 1/M2 * (i1.q*K2 - v2.q*D2)
+
+    propulsion = liqss.Module("propulsion", dqmin=dq0, dqmax=dq0, dqerr=dq0)
+
+    i1 = liqss.Atom("i1", func=di1, units="A",   dq=dq0)
+    v2 = liqss.Atom("v2", func=dv2, units="m/s", dq=dq0)
+
+    i1.connects(v2)
+    v2.connects(i1)        
+
+    propulsion.add_atoms(i1, v2)
+
+    # sys = liqss.System(dqmin=dq0, dqmax=dq0, dqerr=dq0)
+    # sys.Add_Modules(machine, dq2dc, propulsion)
+
+    propulsion.initialize()
+    propulsion.run_to(1.0, verbose=True)
+
+    plot(*propulsion.atoms.values())
 
 
+def xfmr3winding():
+
+    """
              
                R1  L1       1:N1                                   
-         .----VVV--UUU-----.      .------------------.
+         .----VVV--UUU-----.      .--------+---------.
          |    --->         |      |        |         |      
       + ,-.    i1           ) || (         |         |      
     E1 (   )                ) || (         |         |
@@ -186,4 +255,5 @@ def xfmr3winding():
 if __name__ == "__main__":
 
     #xfmr2winding()
-    xfmr3winding()
+    #xfmr3winding()
+    propulsion()
