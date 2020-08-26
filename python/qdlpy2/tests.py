@@ -164,7 +164,7 @@ def genset():
     Ka = 10.0/120.0e3
     Ta = 10.0
 
-    Tm_max = -2.65e5
+    Tm_max = -265000.0  # 25% rated
     vb = 20.0e3
     efd0 = 10.3
     efd_cmd = 9.406
@@ -312,11 +312,11 @@ def genset():
     plot_only_mode = True
     speed_only_dq_sweep = False
 
-    dq0 = 1e-4
+    dq0 = 1.0e-4
 
     tmax = 40.0
 
-    euler_dt = 1.0e-3
+    euler_dt = 1.0e-4
 
     plot_files = []
 
@@ -324,13 +324,14 @@ def genset():
     exp1 = -3
     npts = 3
 
-    dq_points = np.logspace(exp0, exp1, num=npts)
+    #dq_points = np.logspace(exp0, exp1, num=npts)
 
-    for i in range(npts):
-         plot_files.append("saved_data_dq_{}_b.pickle".format(i))
+    #for i in range(npts):
+    #     plot_files.append("saved_data_dq_{}_b.pickle".format(i))
    
     # for fixed dq:
-    #dq_points = [1.0e-5]
+    dq_points = [1.0e-4]
+    plot_files.append("saved_data_dq_{}.pickle".format(dq_points[0]))
 
     # for zoom plots:
     #plot_files = ["test.pickle"]
@@ -453,8 +454,8 @@ def genset():
 
         return rslt
 
-    time_plots = False
-    time_dq_sens_plots = True
+    time_plots = True
+    time_dq_sens_plots = False
     accuracy_time_plots = False
     accuracy_agg_plots = False
     accuracy_agg_plots_per_atom = False
@@ -471,6 +472,14 @@ def genset():
         def plot_paper(atom, label, show_upd=True, xlim=None, ylim1=None, ylim2=None, scl=1.0, save2file=False, filename=None, order=[0, 1], multilabel="", holdstart=False, holdend=False, lstyle=None):
 
             if not holdend: plt.figure()
+
+            font_size = 14
+
+            plt.rc('font', size=font_size)          # controls default text sizes
+            #plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+            #plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+            #plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+            #plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
 
             yax1 = plt.gca()
 
@@ -521,27 +530,34 @@ def genset():
         
             if len(order) > 1 and not holdstart: yax1.legend()
     
+            plt.tight_layout()
+
             if save2file and not holdstart:
                 if filename:
-                    plt.savefig(filename)
+                    plt.savefig(filename, bbox_inches='tight')
                 else:
-                    plt.savefig("{}.pdf".format(atom))
-            
+                    plt.savefig("{}.pdf".format(atom), bbox_inches='tight')
+
+            #if not holdstart:
+            #    plt.show()
+
             if not holdstart:
-                plt.show()
+                plt.close()
+
 
         xlim = [0, 40]
 
         # states:
 
-        show_upd = False
-        save2file = False
+        show_upd = True
+        save2file = True
 
-        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=show_upd, save2file=save2file, filename=r"plots\fdr_full_dq_1e-5.pdf",     order=[1, 0], xlim=xlim)
-        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=show_upd, save2file=save2file, filename=r"plots\fqr_full_dq_1e-5.pdf",     order=[1, 0], xlim=xlim)
-        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fF_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fD_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
-        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fQ_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
+        ylim2 = [-50, 250]
+        plot_paper("fdr",   r"$\Psi_{dr} (Wb)$",     show_upd=show_upd, save2file=save2file, filename=r"plots\fdr_full_dq_1e-5.pdf",     order=[1, 0], xlim=xlim, ylim2=ylim2)
+        plot_paper("fqr",   r"$\Psi_{qr} (Wb)$",     show_upd=show_upd, save2file=save2file, filename=r"plots\fqr_full_dq_1e-5.pdf",     order=[1, 0], xlim=xlim, ylim2=ylim2)
+        plot_paper("fF",    r"$\Psi_{F} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fF_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim, ylim2=ylim2)
+        plot_paper("fD",    r"$\Psi_{D} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fD_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim, ylim2=ylim2)
+        plot_paper("fQ",    r"$\Psi_{Q} (Wb)$",      show_upd=show_upd, save2file=save2file, filename=r"plots\fQ_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim, ylim2=ylim2)
         plot_paper("wr",    r"$\omega_{r} (rad/s)$", show_upd=show_upd, save2file=save2file, filename=r"plots\wr_full_dq_1e-5.pdf",      order=[1, 0], xlim=xlim)
         plot_paper("theta", r"$\theta (rad)$",       show_upd=show_upd, save2file=save2file, filename=r"plots\theta _full_dq_1e-5.pdf",  order=[1, 0], xlim=xlim)
 
@@ -552,6 +568,7 @@ def genset():
         plot_paper("id", r"$i_d\:$",   show_upd=False, order=[1, 0], xlim=xlim, holdstart=True, multilabel="i (A)")
         plot_paper("iq", r"$i_q\:$",   show_upd=False, save2file=True, filename=r"plots\currents_full_dq_1e-5.pdf",  order=[1, 0], xlim=xlim, holdend=True, multilabel="i (A)", lstyle=["y--", "r-"])
 
+        print("Done creating plots.")
 
     if time_dq_sens_plots:
 

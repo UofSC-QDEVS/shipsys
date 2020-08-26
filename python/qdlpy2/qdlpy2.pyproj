@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{4c0d9049-ec88-40c5-8d3f-6da6da6a2460}</ProjectGuid>
     <ProjectHome />
-    <StartupFile>unittests.py</StartupFile>
+    <StartupFile>tests.py</StartupFile>
     <SearchPath />
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>

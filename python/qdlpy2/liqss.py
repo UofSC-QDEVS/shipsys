@@ -1,3 +1,18 @@
+"""
+
+          L
+    o----UUU----o------o
+   +|           |      |
+ V ( )         === C  [ ] R
+    |           |      |
+    o-----------o------o
+               _|_
+                -
+
+Branch(node1, node2)
+
+"""
+
 
 from math import sin, asin, pi, sqrt
 from matplotlib import pyplot as plt
@@ -526,8 +541,6 @@ class Atom(object):
             return self.x0
 
 
-
-
 class ComplexAtom(Atom):
 
     def __init__(self, *args, freq1=1.0, **kwargs):
@@ -696,7 +709,6 @@ class ComplexAtom(Atom):
         self.qlo = self.q - complex(self.dq, self.dq) 
 
         self.qhi = self.q + complex(self.dq, self.dq) 
-
 
 
 class Module(object):
@@ -876,4 +888,14 @@ class Module(object):
             print(str(self.iprint) + "%")
             self.iprint += 1
 
+
+class System(object):
+
+    def __init__(self, name, dqmin=None, dqmax=None, dqerr=None, dtmin=None,
+                 dq=None, print_time=False):
+        pass
+
+    def add_device(self, device):
+
+        pass
 
