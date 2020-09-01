@@ -1,16 +1,5 @@
 """
 
-          L
-    o----UUU----o------o
-   +|           |      |
- V ( )         === C  [ ] R
-    |           |      |
-    o-----------o------o
-               _|_
-                -
-
-Branch(node1, node2)
-
 """
 
 
@@ -34,6 +23,54 @@ class SourceType:
     PWM = "PWM"
     RAMP = "RAMP"
     FUNCTION = "FUNCTION"
+
+
+
+class LimAtom(object):
+
+    pass
+
+
+class LimLantencyBranch(LimAtom):
+
+    def __init__(self, l, r=0.0, e=0.0):
+        
+        self.l = l
+        self.r = r
+        self.e = e
+        self.tnodes = []
+        self.zbranches = [] 
+
+    def add_tnode(self, node, gain):
+        pass
+
+    def add_zbranch(self, branch, gain):
+        pass
+
+
+class LimLatencyNode(LimAtom):
+
+    pass
+
+
+class LimDevice(object):
+
+    def __init__(self):
+
+        self.branches = {}
+        self.nodes = {}
+
+    def add_branch(self, branch):
+        pass
+
+
+class LimSystem(object):
+
+    def __init__(self):
+        self.qssmodel = LimSystem()
+
+    def add_device(self, device):
+        pass
 
 
 class Atom(object):
