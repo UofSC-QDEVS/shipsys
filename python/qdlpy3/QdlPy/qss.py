@@ -1,17 +1,32 @@
+""" Linear-implicit Quantized State System Model and Solver
 """
 
-"""
-
-
-from math import sin, asin, pi, sqrt
-from matplotlib import pyplot as plt
+from math import sin, asin, pi, sqrt, floor
 from collections import OrderedDict as odict
-import numpy
+import numpy as np
+from matplotlib import pyplot as plt
+
+
+# ============================ Private Constants ===============================
 
 
 _EPS = 1.0e-9
 _INF = float('inf')
 _MAXITER = 1000
+
+
+# ============================ Public Constants ================================
+
+
+DEF_DQ = 1e-6        # default delta Q
+DEF_DQMIN = 1e-6     # default minimum delta Q (for dynamic dq mode)
+DEF_DQMAX = 1e-6     # default maximum delta Q (for dynamic dq mode)
+DEF_DQERR = 1e-2     # default delta Q absolute error (for dynamic dq mode)
+DEF_DTMIN = 1e-12    # default minimum time step
+DEF_DMAX = 1e5       # default maximum derivative (slew-rate)
+
+
+# ============================= Enumerations ===================================
 
 
 class SourceType:
@@ -24,62 +39,16 @@ class SourceType:
     RAMP = "RAMP"
     FUNCTION = "FUNCTION"
 
+# ============================== QSS Model =====================================
 
 
-class LimAtom(object):
-
-    pass
-
-
-class LimLantencyBranch(LimAtom):
-
-    def __init__(self, l, r=0.0, e=0.0):
-        
-        self.l = l
-        self.r = r
-        self.e = e
-        self.tnodes = []
-        self.zbranches = [] 
-
-    def add_tnode(self, node, gain):
-        pass
-
-    def add_zbranch(self, branch, gain):
-        pass
-
-
-class LimLatencyNode(LimAtom):
-
-    pass
-
-
-class LimDevice(object):
-
-    def __init__(self):
-
-        self.branches = {}
-        self.nodes = {}
-
-    def add_branch(self, branch):
-        pass
-
-
-class LimSystem(object):
-
-    def __init__(self):
-        self.qssmodel = LimSystem()
-
-    def add_device(self, device):
-        pass
-
-
-class Atom(object):
+class LiqssAtom(object):
 
     def __init__(self, name, a=0.0, b=0.0, c=0.0, source_type=SourceType.NONE,
-                 x0=0.0, x1=0.0, x2=0.0, xa=0.0, freq=0.0, phi=0.0, func=None,
+                 x0=0.0, x1=0.0, x2=0.0, xa=0.0, freq=0.0, phi=0.0, derivative=None,
                  duty=0.0, t1=0.0, t2=0.0, dq=None, dqmin=None, dqmax=None,
                  dqerr=None, dtmin=None, dmax=1e5, units="", srcfunc=None,
-                 srcdt=None, output_scale=1.0):
+                 srcdt=None, output_scale=1.0, parent=None):
 
         self.name = name
 
@@ -106,7 +75,7 @@ class Atom(object):
         if (self.t2 - self.t1) > 0:
             self.ramp_slope = (self.x2 - self.x1) / (self.t2 - self.t1)
 
-        # cache snie wave ta function params:
+        # cache sine wave ta function params:
 
         self.omega = 2.0 * pi * self.freq
 
@@ -118,41 +87,27 @@ class Atom(object):
 
         self.sys = None  # parent LiqssSystem reference
 
-        # limits: 
-        if dq:
-            self.dq = dq  
-            self.dqmin = dq
-            self.dqmax = dq
-            self.dqerr = 0.0
-        else:
-            self.dq = None
+        self.dq = dq
 
-        self.dmax = dmax
-
+        self.dqmin = None
         if dqmin:
             self.dqmin = dqmin
-        elif not dq:
-            self.dqmin = None
+        elif dq:
+            self.dqmin = dq
 
+        self.dqmax = None
         if dqmax:
             self.dqmax = dqmax
-        elif not dq:
-            self.dqmax = None
+        elif dq:
+            self.dqmax = dq
 
-        if dqerr:
-            self.dqerr = dqerr
-        elif not dq:
-            self.dqerr = None
+        self.dqerr = dqerr
+        self.dtmin = dtmin
+        self.dmax = dmax
 
-        if dtmin:
-            self.dtmin = dtmin
-        else:
-            self.dtmin = None
-
-        # delegate derivative function:
-        self.func = None
-        if func:
-            self.func = func
+        # delegate derivative functions and parent object:
+        self.derivative = derivative
+        self.parent = parent
 
         # playback function:
         self.srcfunc = srcfunc
@@ -190,6 +145,8 @@ class Atom(object):
         self.implicit = True
 
         self.output_scale = output_scale
+
+        self.parent = parent
 
     def connect(self, atom, coeff=0.0):
 
@@ -282,7 +239,10 @@ class Atom(object):
 
         elif self.source_type == SourceType.FUNCTION:
 
-            self.x = self.srcfunc()
+            if self.parent:
+                self.x = self.parent.srcfunc()
+            else:
+                self.x = self.srcfunc()
 
         elif self.source_type == SourceType.NONE:
 
@@ -434,10 +394,14 @@ class Atom(object):
 
         d = 0.0
 
-        if self.func:
-            return self.func()
+        if self.derivative:
+            d = self.derivative()
 
-        if self.source_type == SourceType.NONE:
+        elif self.parent:
+            if self.parent.derivative:
+                d = self.parent.derivative()
+
+        elif self.source_type == SourceType.NONE:
 
             xsum = 0.0
             for atom, coef in self.recieve_from.items():
@@ -447,10 +411,6 @@ class Atom(object):
         elif self.source_type == SourceType.RAMP:
 
             d = self.ramp_slope
-
-        else:
-
-            d = 0.0
 
         return d
 
@@ -578,8 +538,16 @@ class Atom(object):
         else:
             return self.x0
 
+    def __repr__(self):
 
-class ComplexAtom(Atom):
+        return self.name
+
+    def __str__(self):
+
+        return self.name
+
+
+class ComplexAtom(LiqssAtom):
 
     def __init__(self, *args, freq1=1.0, **kwargs):
 
@@ -749,37 +717,40 @@ class ComplexAtom(Atom):
         self.qhi = self.q + complex(self.dq, self.dq) 
 
 
-class Module(object):
+class System(object):
 
-    def __init__(self, name, dqmin=None, dqmax=None, dqerr=None, dtmin=None,
-                 dq=None, print_time=False):
+    def __init__(self, name, dq=None, dqmin=None, dqmax=None, dqerr=None, dtmin=None,
+                 dmax=None, print_time=False):
         
         self.name = name
 
+        self.dq = DEF_DQ
         if dq:
             self.dq = dq
-        else:
-            self.dq = 1.0e-6
 
+        self.dqmin = DEF_DQMIN
         if dqmin:
             self.dqmin = dqmin
-        else:
+        elif dq:
             self.dqmin = dq
 
+        self.dqmax = DEF_DQMAX
         if dqmax:
             self.dqmax = dqmax
-        else:
-            self.dqmax = dqmin
+        elif dq:
+            self.dqmax = dq
 
+        self.dqerr = DEF_DQERR
         if dqerr:
             self.dqerr = dqerr
-        else:
-            self.dqerr = 0.0
 
+        self.dtmin = DEF_DTMIN
         if dtmin:
             self.dtmin = dtmin
-        else:
-            self.dtmin = _EPS
+
+        self.dmax = DEF_DMAX
+        if dmax:
+            self.dmax = dmax
 
         self.print_time = print_time
 
@@ -794,21 +765,31 @@ class Module(object):
 
         for atom in atoms:
 
-            if not atom.dq:
-                atom.dq = self.dq
+            self.add_atom(atom)
 
-            if not atom.dqmin:
-                atom.dqmin = self.dqmin
+    def add_atom(self, atom):
 
-            if not atom.dqmax:
-                atom.dqmax = self.dqmax
+        if not atom.dq:
+            atom.dq = self.dq
 
-            if not atom.dtmin:
-                atom.dtmin = self.dtmin
+        if not atom.dqmin:
+            atom.dqmin = self.dqmin
 
-            atom.sys = self
-            self.atoms[atom.name] = atom
-            setattr(self, atom.name, atom)
+        if not atom.dqmax:
+            atom.dqmax = self.dqmax
+
+        if not atom.dqerr:
+            atom.dqerr = self.dqerr
+
+        if not atom.dtmin:
+            atom.dtmin = self.dtmin
+
+        if not atom.dmax:
+            atom.dmax = self.dmax
+
+        atom.sys = self
+        self.atoms[atom.name] = atom
+        setattr(self, atom.name, atom)
 
     def initialize(self, t0=0.0):
 
@@ -926,15 +907,3 @@ class Module(object):
         while self.iprint < i:
             print(str(self.iprint) + "%")
             self.iprint += 1
-
-
-class System(object):
-
-    def __init__(self, name, dqmin=None, dqmax=None, dqerr=None, dtmin=None,
-                 dq=None, print_time=False):
-        pass
-
-    def add_device(self, device):
-
-        pass
-

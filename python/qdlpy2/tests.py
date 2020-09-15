@@ -275,14 +275,14 @@ def genset():
 
     # derivative functions:
 
-    def didc():
-        return 1/Lf * (Vdc.q - idc.q * Rf - vf.q)
+    #def didc():
+    #    return 1/Lf * (Vdc.q - idc.q * Rf - vf.q)
 
-    def dvf():
-        return 1/Cf * (idc.q - ip.q)
+    #def dvf():
+    #    return 1/Cf * (idc.q - ip.q)
 
-    def dip():
-        return 1/Lp * (vf.q - ip.q * Rp)
+    #def dip():
+    #    return 1/Lp * (vf.q - ip.q * Rp)
 
     def dfdr():
        return ed() - Rs * id() + wr.q * fqr.q
@@ -305,9 +305,9 @@ def genset():
     def dtheta():
         return wr.q - wb
 
-    def davr():
-        #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
-        return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
+    #def davr():
+    #    #return (1/Ta) * (Ka * sqrt(vd.q**2 + vq.q**2) - avr.q)
+    #    return (1/Ta) * (Ka * vdc.q - avr.q)   #  v = i'*L + i*R    i' = (R/L)*(v/R - i)
 
     plot_only_mode = True
     speed_only_dq_sweep = False
@@ -528,7 +528,7 @@ def genset():
 
             if not holdstart: yax1.grid()
         
-            if len(order) > 1 and not holdstart: yax1.legend()
+            #if len(order) > 1 and not holdstart: yax1.legend()
     
             plt.tight_layout()
 

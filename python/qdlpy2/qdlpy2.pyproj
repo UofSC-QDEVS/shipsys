@@ -5,7 +5,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>{4c0d9049-ec88-40c5-8d3f-6da6da6a2460}</ProjectGuid>
     <ProjectHome />
-    <StartupFile>notionalship1.py</StartupFile>
+    <StartupFile>tests.py</StartupFile>
     <SearchPath />
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
@@ -28,6 +28,9 @@
     </Compile>
     <Compile Include="qdl.py" />
     <Compile Include="liqss.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="ship_reduced.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="tests.py" />
