@@ -72,7 +72,7 @@ class StateSpace(object):
         t = np.arange(self.time, tstop, self.dt)
         y = np.zeros((self.n, t.size))
 
-        y[:,0:1] = np.dot(self.c, self.x) + np.dot(self.d, self.u)
+        y[:,0:1] = np.dot(self.c, self.x) + np.dot(self.d, self.u0)
 
         for i in range(1, t.size):
             y[:,i:i+1] = self.step(self.u0)
@@ -81,5 +81,7 @@ class StateSpace(object):
 
         self.t = np.concatenate([self.t, t], axis=0)
         self.y = np.concatenate([self.y, y], axis=1)
+
+        return t, y
 
 

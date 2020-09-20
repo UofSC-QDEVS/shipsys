@@ -24,9 +24,21 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="funcss.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="lim.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="models.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="qss.py" />
     <Compile Include="qdl.py" />
     <Compile Include="lti.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="tests.py">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>

@@ -42,15 +42,18 @@ class SourceType:
 # ============================== QSS Model =====================================
 
 
-class LiqssAtom(object):
+class Atom(object):
 
-    def __init__(self, name, a=0.0, b=0.0, c=0.0, source_type=SourceType.NONE,
-                 x0=0.0, x1=0.0, x2=0.0, xa=0.0, freq=0.0, phi=0.0, derivative=None,
-                 duty=0.0, t1=0.0, t2=0.0, dq=None, dqmin=None, dqmax=None,
-                 dqerr=None, dtmin=None, dmax=1e5, units="", srcfunc=None,
-                 srcdt=None, output_scale=1.0, parent=None):
+    def __init__(self, name, is_latent=True, a=0.0, b=0.0, c=0.0,
+                 source_type=SourceType.NONE, x0=0.0, x1=0.0, x2=0.0, xa=0.0,
+                 freq=0.0, phi=0.0, derivative=None, duty=0.0, t1=0.0, t2=0.0,
+                 dq=None, dqmin=None, dqmax=None, dqerr=None, dtmin=None,
+                 dmax=1e5, units="", srcfunc=None, fixed_dt=None, output_scale=1.0,
+                 parent=None):
 
         self.name = name
+
+        self.is_latent = is_latent
 
         self.a = a
         self.b = b
@@ -171,7 +174,12 @@ class LiqssAtom(object):
         self.tnext = _INF
 
         if self.source_type == SourceType.FUNCTION:
-            self.x = self.srcfunc()
+
+            if self.parent:
+                self.x = self.parent.srcfunc()
+            else:
+                self.x = self.srcfunc()
+
             self.q = self.x
             self.q0 = self.x
         else:
@@ -394,19 +402,19 @@ class LiqssAtom(object):
 
         d = 0.0
 
-        if self.derivative:
-            d = self.derivative()
+        if self.source_type == SourceType.NONE:
 
-        elif self.parent:
-            if self.parent.derivative:
-                d = self.parent.derivative()
+            if self.derivative:  # delagate  
+                if self.parent:
+                    d = self.parent.derivative()
+                else:
+                    d = self.derivative()
 
-        elif self.source_type == SourceType.NONE:
-
-            xsum = 0.0
-            for atom, coef in self.recieve_from.items():
-                xsum += atom.q * coef
-            d = self.ainv * (self.c - qval * self.b - xsum)
+            else:  # auto ode derivative: 
+                xsum = 0.0
+                for atom, coef in self.recieve_from.items():
+                    xsum += atom.q * coef
+                d = self.ainv * (self.c - qval * self.b - xsum)
 
         elif self.source_type == SourceType.RAMP:
 
