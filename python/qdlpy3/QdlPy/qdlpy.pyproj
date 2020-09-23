@@ -33,6 +33,9 @@
     <Compile Include="models.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="ode.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="qss.py" />
     <Compile Include="qdl.py" />
     <Compile Include="lti.py">
