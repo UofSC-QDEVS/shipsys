@@ -9,6 +9,8 @@ import numpy.linalg as la
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+mpl.rc('axes.formatter', useoffset=False)
+
 from scipy.integrate import odeint
 from scipy.optimize import fsolve
 
@@ -27,10 +29,10 @@ _MAXITER = 1000
 # ============================ Public Constants ================================
 
 
-DEF_DQ = 1.0e-6        # default delta Q
-DEF_DQMIN = 1.0e-6     # default minimum delta Q (for dynamic dq mode)
-DEF_DQMAX = 1.0e-6     # default maximum delta Q (for dynamic dq mode)
-DEF_DQERR = 1.0e-2     # default delta Q absolute error (for dynamic dq mode)
+#DEF_DQ = 1.0e-6        # default delta Q
+#DEF_DQMIN = 1.0e-6     # default minimum delta Q (for dynamic dq mode)
+#DEF_DQMAX = 1.0e-6     # default maximum delta Q (for dynamic dq mode)
+#DEF_DQERR = 1.0e-2     # default delta Q absolute error (for dynamic dq mode)
 DEF_DTMIN = 1.0e-12    # default minimum time step
 DEF_DMAX = 1.0e5       # default maximum derivative (slew-rate)
 
@@ -56,64 +58,30 @@ class SourceType:
     FUNCTION = "FUNCTION"
 
 
-class LimAtomType:
-
-    NONE = "NONE"
-    LATENCY_NODE = "LATENCY_NODE"
-    LATENCY_BRANCH = "LATENCY_BRANCH"
-    GROUND_NODE = "GROUND_NODE"
-    CURRENT_SOURCE = "CURRENT_SOURCE"
-    VOLTAGE_SOURCE = "VOLTAGE_SOURCE"
-
-
 # ============================= Qdl Model ======================================
-
-# ========================= Global Functions ===================================
-
-
-def fode(x, t, sys):
-
-    """Returns array of derivatives from state atoms. This function must reside
-    outside of the System class in order to be passed as a delgate to the
-    scipy ode integrator function.
-    """
-
-    dx_dt = [0.0]*sys.n
-
-    for atom in sys.state_atoms:
-        atom.q = x[atom.index]
-
-    for atom in sys.state_atoms:
-        dx_dt[atom.index] = atom.f()
-
-    return dx_dt
-
-
-# ============================== Classes =======================================
 
 
 class Atom(object):
 
-    def __init__(self, name, lim_type=LimAtomType.GROUND_NODE, x0=0.0, dq=None,
-                 dqmin=None, dqmax=None, dqerr=None, dtmin=None, dmax=1e5,
-                 units="", is_linear=True):
+    def __init__(self, name, x0=0.0, dq=None, dqmin=None, dqmax=None,
+                 dqerr=None, dtmin=None, dmax=1e5, units="", is_linear=True):
 
         self.x0 = x0
-        self.lim_type = lim_type
         self.name = name
         self.dq = dq
         self.dqmin = dqmin
         self.dqmax = dqmax
         self.dqerr = dqerr
         self.dtmin = dtmin
-        self.dmax = dmax
+        self.dmax = dmax  # will be scaled by self.dq
         self.units = units
         self.is_linear = is_linear
 
         # simulation variables:
 
         self.qlo = 0.0   
-        self.qhi = 0.0    
+        self.qhi = 0.0 
+        self.time = 0.0
         self.tlast = 0.0  
         self.tnext = 0.0  
         self.x = x0    
@@ -154,11 +122,12 @@ class Atom(object):
 
         self.implicit = True
 
-    def add_connection(self, other, coefficient=1.0, coeffunc=None,
-                       coefobj=None):
+    def add_connection(self, other, coefficient=1.0, coeffunc=None):
         
         connection = Connection(self, other, coefficient=coefficient,
-                                coeffunc=coeffunc, coefobj=coefobj)
+                                coeffunc=coeffunc)
+
+        connection.device = self.device
 
         self.connections.append(connection)
 
@@ -172,15 +141,20 @@ class Atom(object):
 
         # init state:                        
 
-        self.x = self.x0
-        self.q = self.x0
-        self.q0 = self.x0
-        self.qsave = self.x0
-        self.xsave = self.x0
+        if isinstance(self, StateAtom):
+            self.x = self.x0
+
+        if isinstance(self, SourceAtom):
+            self.x = self.u()
+
+        self.q = self.x
+        self.q0 = self.x
+        self.qsave = self.x
+        self.xsave = self.x
 
         # init quantizer values:
 
-        self.dq = self.dqmin
+        #self.dq = self.dqmin
         self.qhi = self.q + self.dq
         self.qlo = self.q - self.dq
 
@@ -210,8 +184,8 @@ class Atom(object):
         self.triggered = False  # reset triggered flag
 
         self.d = self.f()
-        self.d = max(self.d, -self.dmax)
-        self.d = min(self.d, self.dmax)
+        self.d = max(self.d, -self.dmax*self.dq)
+        self.d = min(self.d, self.dmax*self.dq)
 
         self.dint()
         self.quantize()
@@ -345,7 +319,8 @@ class Atom(object):
                 dy_sqrd_sum += (y - q)**2
                 y_sqrd_sum += y**2
 
-            return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(self.qout2) - min(self.qout2))
+            return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(self.qout2) 
+                                                           - min(self.qout2))
 
 
         elif typ.lower().strip() == "re":
@@ -403,16 +378,14 @@ class Atom(object):
 
 class SourceAtom(Atom):
 
-    def __init__(self, name, lim_type=LimAtomType.NONE,
-                 source_type=SourceType.CONSTANT, 
-                 x0=0.0, x1=0.0, x2=0.0, xa=0.0, freq=0.0, phi=0.0, duty=0.0,
-                 t1=0.0, t2=0.0, srcfunc=None, srcobj=None, 
-                 dq=None, dqmin=None, dqmax=None, dqerr=None,
+    def __init__(self, name, source_type=SourceType.CONSTANT, x0=0.0, x1=0.0,
+                 x2=0.0, xa=0.0, freq=0.0, phi=0.0, duty=0.0, t1=0.0, t2=0.0,
+                 srcfunc=None, dq=None, dqmin=None, dqmax=None, dqerr=None,
                  dtmin=None, dmax=1e5, units="", is_linear=True):
 
-        Atom.__init__(self, name=name, lim_type=lim_type, x0=x0, dq=dq,
-                      dqmin=dqmin, dqmax=dqmax, dqerr=dqerr, dtmin=dtmin,
-                      dmax=dmax, units=units, is_linear=is_linear)
+        Atom.__init__(self, name=name, x0=x0, dq=dq, dqmin=dqmin, dqmax=dqmax,
+                      dqerr=dqerr, dtmin=dtmin, dmax=dmax, units=units,
+                      is_linear=is_linear)
 
         self.source_type = source_type
         self.x1 = x1
@@ -424,7 +397,6 @@ class SourceAtom(Atom):
         self.t1 = t1
         self.t2 = t2 
         self.srcfunc = srcfunc
-        self.srcobj = srcobj
 
         # source derived quantities:
 
@@ -440,11 +412,15 @@ class SourceAtom(Atom):
         if (self.t2 - self.t1) > 0:
             self.ramp_slope = (self.x2 - self.x1) / (self.t2 - self.t1)
 
+    def u(self):
+
+        return self.dint()
+
     def dint(self):
 
         if self.source_type == SourceType.FUNCTION:
 
-            self.x = self.srcfunc(self.srcobj, self.time)
+            self.x = self.srcfunc(self.device, self.time)
 
         elif self.source_type == SourceType.CONSTANT:
 
@@ -460,7 +436,7 @@ class SourceAtom(Atom):
         elif self.source_type == SourceType.SINE:
 
             if self.time >= self.t1:
-                self.x = self.x0 + self.xa * sin(self.omega * self.time + self.phi)
+                self.x = self.x0 + self.xa*sin(self.omega*self.time + self.phi)
             else:
                 self.x = self.x0
 
@@ -505,9 +481,9 @@ class SourceAtom(Atom):
 
             elif self.time < self.t2:
                 if self.d > 0.0:
-                    self.tnext = self.time + (self.q + self.dq - self.x) / self.d
+                    self.tnext = self.time + (self.q + self.dq - self.x)/self.d
                 elif self.d < 0.0:
-                    self.tnext = self.time + (self.q - self.dq - self.x) / self.d
+                    self.tnext = self.time + (self.q - self.dq - self.x)/self.d
                 else:
                     self.tnext = _INF
 
@@ -538,21 +514,33 @@ class SourceAtom(Atom):
 
                 # determine next transition time. Saturate at +/- xa:
             
-                if theta < pi/2.0:      # quadrant I
-                    self.tnext = t0 + (asin(min(1.0, (x + self.dq)/self.xa))) / self.omega
+                # quadrant I
+                if theta < pi/2.0:      
+                    self.tnext = (t0 + (asin(min(1.0, (x + self.dq)/self.xa)))
+                                  / self.omega)
 
-                elif theta < pi:        # quadrant II
-                    self.tnext = t0 + self.T/2.0 - (asin(max(0.0, (x - self.dq)/self.xa))) / self.omega
+                # quadrant II
+                elif theta < pi:        
+                    self.tnext = (t0 + self.T/2.0
+                                  - (asin(max(0.0,(x - self.dq)/self.xa)))
+                                  / self.omega)
 
-                elif theta < 3.0*pi/2:  # quadrant III
-                    self.tnext = t0 + self.T/2.0 - (asin(max(-1.0, (x - self.dq)/self.xa))) / self.omega
+                # quadrant III
+                elif theta < 3.0*pi/2:  
+                    self.tnext = (t0 + self.T/2.0
+                                  - (asin(max(-1.0, (x - self.dq)/self.xa)))
+                                  / self.omega)
 
-                else:                   # quadrant IV
-                    self.tnext = t0 + self.T + (asin(min(0.0, (x + self.dq)/self.xa))) / self.omega
+                # quadrant IV
+                else:                   
+                    self.tnext = (t0 + self.T
+                                  + (asin(min(0.0, (x + self.dq)/self.xa)))
+                                  / self.omega)
 
         elif self.source_type == SourceType.FUNCTION:
 
-            self.tnext = self.time + self.srcdt
+            pass
+            #self.tnext = self.time + self.srcdt # <-- should we do this?
 
         self.tnext = max(self.tnext, self.tlast + self.dtmin)
 
@@ -579,6 +567,10 @@ class SourceAtom(Atom):
 
             pass  # todo: sigmoid approx.
 
+        elif self.source_type == SourceType.FUNCTION:
+
+            d = 0.0  # todo: add a time derivative function delegate
+
         return d
 
 
@@ -587,20 +579,17 @@ class StateAtom(Atom):
     """ Qdl State Atom.
     """
 
-    def __init__(self, name, lim_type=LimAtomType.NONE, x0=0.0, coefficient=0.0,
-                 coeffunc=None, coefobj=None, derfunc=None, derobj=None,
-                 dq=None, dqmin=None, dqmax=None, dqerr=None,
+    def __init__(self, name, x0=0.0, coefficient=0.0, coeffunc=None,
+                 derfunc=None, dq=None, dqmin=None, dqmax=None, dqerr=None,
                  dtmin=None, dmax=1e5, units="", is_linear=True):
 
-        Atom.__init__(self, name=name, lim_type=lim_type, x0=x0, dq=dq, dqmin=dqmin, dqmax=dqmax, dqerr=dqerr,
-                      dtmin=dtmin, dmax=dmax, units=units, is_linear=is_linear)
+        Atom.__init__(self, name=name, x0=x0, dq=dq, dqmin=dqmin, dqmax=dqmax,
+                      dqerr=dqerr, dtmin=dtmin, dmax=dmax, units=units,
+                      is_linear=is_linear)
 
         self.coefficient = coefficient
         self.coeffunc = coeffunc
-        self.coefobj = coefobj
-
         self.derfunc = derfunc
-        self.derobj = derobj
 
     def dint(self):
 
@@ -665,7 +654,7 @@ class StateAtom(Atom):
     def compute_coefficient(self):
 
         if self.coeffunc:
-            return self.coeffunc(self.coefobj)
+            return self.coeffunc(self.device)
         else:
             return self.coefficient
 
@@ -675,7 +664,7 @@ class StateAtom(Atom):
             q = self.q
 
         if self.derfunc:
-            return self.derfunc(self.derobj, q)
+            return self.derfunc(self.device, q)
 
         d = self.compute_coefficient() * q
 
@@ -697,30 +686,30 @@ class System(object):
 
         # qss solution parameters:
 
-        self.dq = DEF_DQ
-        if dq:
-            self.dq = dq
-
-        self.dqmin = DEF_DQMIN
-        if dqmin:
-            self.dqmin = dqmin
-        elif dq:
-            self.dqmin = dq
-
-        self.dqmax = DEF_DQMAX
-        if dqmax:
-            self.dqmax = dqmax
-        elif dq:
-            self.dqmax = dq
-
-        self.dqerr = DEF_DQERR
-        if dqerr:
-            self.dqerr = dqerr
-
+        #self.dq = DEF_DQ
+        #if dq:
+        #    self.dq = dq
+        #
+        #self.dqmin = DEF_DQMIN
+        #if dqmin:
+        #    self.dqmin = dqmin
+        #elif dq:
+        #    self.dqmin = dq
+        #
+        #self.dqmax = DEF_DQMAX
+        #if dqmax:
+        #    self.dqmax = dqmax
+        #elif dq:
+        #    self.dqmax = dq
+        #
+        #self.dqerr = DEF_DQERR
+        #if dqerr:
+        #    self.dqerr = dqerr
+        #
         self.dtmin = DEF_DTMIN
         if dtmin:
             self.dtmin = dtmin
-
+        
         self.dmax = DEF_DMAX
         if dmax:
             self.dmax = dmax
@@ -768,14 +757,14 @@ class System(object):
             if not atom.dq:
                 atom.dq = self.dq
 
-            if not atom.dqmin:
-                atom.dqmin = self.dqmin
-
-            if not atom.dqmax:
-                atom.dqmax = self.dqmax
-
-            if not atom.dqerr:
-                atom.dqerr = self.dqerr
+            #if not atom.dqmin:
+            #    atom.dqmin = self.dqmin
+            #
+            #if not atom.dqmax:
+            #    atom.dqmax = self.dqmax
+            #
+            #if not atom.dqerr:
+            #    atom.dqerr = self.dqerr
 
             if not atom.dtmin:
                 atom.dtmin = self.dtmin
@@ -783,6 +772,7 @@ class System(object):
             if not atom.dmax:
                 atom.dmax = self.dmax
 
+            atom.device = device
             atom.sys = self
             self.atoms.append(atom)
 
@@ -806,25 +796,35 @@ class System(object):
         for device in devices:
             self.add_device(device)
 
-    def store_q(self):
+    def save_state(self):
 
         for atom in self.atoms:
             atom.qsave = atom.q
+            atom.xsave = atom.x
 
-    def restore_q(self):
+    def restore_state(self):
 
         for atom in self.atoms:
             atom.q = atom.qsave
-
-    def store_x(self):
-
-        for atom in self.atoms:
-            atom.xsave = atom.x
-
-    def restore_x(self):
-
-        for atom in self.atoms:
             atom.x = atom.xsave
+
+    @staticmethod
+    def compute_odes(x, t, sys):
+
+        """Returns array of derivatives from state atoms. This function must be
+        a static method in order to be passed as a delgate to the
+        scipy ode integrator function.
+        """
+
+        dx_dt = [0.0]*sys.n
+
+        for atom in sys.state_atoms:
+            atom.q = x[atom.index]
+
+        for atom in sys.state_atoms:
+            dx_dt[atom.index] = atom.f()
+
+        return dx_dt
 
     def init_qss(self, t0=0.0, dc=False):
 
@@ -837,7 +837,9 @@ class System(object):
 
         self.time = t0
 
-        for atom in self.atoms:   
+        for atom in self.state_atoms:   
+            atom.initialize(t0)
+        for atom in self.source_atoms:   
             atom.initialize(t0)
 
     def init_ss(self, t0=0.0, dt=1e-4, dc=False):
@@ -858,7 +860,9 @@ class System(object):
         self.x = self.x0
         self.u = self.u0
 
-        for atom in self.atoms:   
+        for atom in self.state_atoms:   
+            atom.initialize(t0)
+        for atom in self.source_atoms:   
             atom.initialize(t0)
 
     def init_ode(self, t0=0.0, dt=1e-4, dc=False):
@@ -869,13 +873,16 @@ class System(object):
         if dc:
             self.solve_dc()
             self.x = self.x0
+
         else:
             self.x0 = [0.0]*self.n
             for atom in self.state_atoms:
                 self.x0[atom.index] = atom.x0
             self.x = self.x0
 
-        for atom in self.atoms:   
+        for atom in self.state_atoms:   
+            atom.initialize(t0)
+        for atom in self.source_atoms:   
             atom.initialize(t0)
 
     def build_ss(self, reset_state=False):
@@ -950,27 +957,27 @@ class System(object):
         """solves for the dc steady-state.
         """
 
-        # state space method (linear only):
-        #self.build_ss(reset_state=True)
-        #x = la.solve(self.a, -1.0 * np.dot(self.b, self.u0))
+        ## # old state space method (linear only):
+        ##self.build_ss(reset_state=True)
+        ##x = la.solve(self.a, -1.0 * np.dot(self.b, self.u0))
 
         x0 = [0.0]*self.n
 
         for atom in self.state_atoms:
             x0[atom.index] = atom.x0
 
-        x = fsolve(fode, x0, args=(0, sys))
+        x = fsolve(self.compute_odes, x0, args=(0, sys))
         
         self.x0 = x
 
         for atom in self.state_atoms:
             atom.x0 = x[atom.index]
         
-    def run_ss(self, tstop):
+    def run_ss(self, tstop, reset_after=True):
 
         self.tstop = tstop
 
-        self.store_q()
+        if reset_after: self.save_state()
 
         print("State Space Simulation started...")
 
@@ -982,13 +989,13 @@ class System(object):
 
         print("State Space Simulation complete.")
 
-        self.restore_q()
+        if reset_after: self.restore_state()
 
-    def run_ode(self, tstop):
+    def run_ode(self, tstop, reset_after=True):
 
         self.tstop = tstop
 
-        self.store_q()
+        if reset_after: self.save_state()
 
         for atom in self.atoms:
             atom.dint()
@@ -997,24 +1004,43 @@ class System(object):
         print("Non-linear ODE Simulation started...")
 
         t = np.arange(self.time_ode, self.tstop, self.dt)
-        y = odeint(fode, self.x, t, args=(sys,))
+        y = odeint(self.compute_odes, self.x, t, args=(sys,))
 
         for atom in self.state_atoms:
             for i, tval in enumerate(t):
                 atom.save_ode(tval, y[i, atom.index])
             self.x[atom.index] = y[-1, atom.index]
 
+        for i, tval in enumerate(t):
+            for atom in self.state_atoms:
+                atom.q = y[i, atom.index]
+            for atom in self.source_atoms:
+                atom.save_ode(tval, atom.u())
+
+        for atom in self.state_atoms:
+            xf = y[-1, atom.index]
+            self.x[atom.index] = xf
+            atom.x = xf
+            atom.q = xf
+
         self.time_ode = self.tstop
 
         print("Non-linear ODE Simulation complete.")
 
-        self.restore_q()
+        if reset_after: self.restore_state()
 
-    def run_qss(self, tstop, verbose=False):
-
-        self.tstop = tstop
+    def run_qss(self, tstop, fixed_dt=None, verbose=False, reset_after=True,
+                chk_ss_period=None, chk_ss_ndq=None):
 
         print("QSS Simulation started...")
+
+        self.tstop = tstop
+        if reset_after: self.save_state()
+
+        ndq = 2
+        if chk_ss_ndq: ndq = chk_ss_ndq
+        check_ss_clock = 0.0
+        check_ss_tlast = self.tstop = tstop
 
         # start by updating all atoms:
 
@@ -1022,41 +1048,103 @@ class System(object):
             for atom in self.atoms:
                 atom.update(self.time)
                 atom.save()
+                atom.save()
 
-        # now iterate over atoms until nothing triggered:
+        if fixed_dt:
 
-        i = 0
-        while i < _MAXITER:
-            triggered = False
-            for atom in self.atoms:
-                if atom.triggered:
-                    triggered = True
-                    atom.update(self.time)
-            if not triggered:
-                break
-            i += 1
+            while(self.time <= self.tstop):
 
-        # main simulation loop:
+                for atom in self.source_atoms:
+                    atom.step(self.time)
 
-        tlast = self.time
-        last_print_time =  self.time
+                for atom in self.state_atoms:
+                    atom.step(self.time)
 
-        while self.time < self.tstop:
-            self.advance()
-            if verbose and self.time-last_print_time > 0.1:
-                print("t = {0:5.2f} s".format(self.time))
-                last_print_time = self.time
+                self.time += fixed_dt
+
+        else:
+
+            # now iterate over atoms until nothing triggered:
+
+            i = 0
+            while i < _MAXITER:
+                triggered = False
+                for atom in self.atoms:
+                    if atom.triggered:
+                        triggered = True
+                        atom.update(self.time)
+                if not triggered:
+                    break
+                i += 1
+
+            # main simulation loop:
+
             tlast = self.time
+            last_print_time =  self.time
 
-        # force time to tstop and do one update at time = tstop:
+            while self.time < self.tstop:
 
-        self.time = self.tstop
+                self.advance()
 
-        for atom in self.atoms:
-            atom.update(self.time)
-            atom.save()
+                if chk_ss_period:
+                    if check_ss_clock > chk_ss_period:
+                        check_ss_clock = 0.0
+                        self.check_steadystate(ndq=ndq)
+
+                if verbose and self.time-last_print_time > 0.1:
+                    print("t = {0:5.2f} s".format(self.time))
+                    last_print_time = self.time
+
+                check_ss_clock += self.time - tlast 
+                tlast = self.time
+                
+            # force time to tstop and do one update at time = tstop:
+
+            self.time = self.tstop
+
+            for atom in self.atoms:
+                atom.update(self.time)
+                atom.save()
+
+        if reset_after: self.restore_state()
 
         print("QSS Simulation complete.")
+
+    def check_steadystate(self, ndq=2, apply_if_true=True):
+
+        is_ss = True
+
+        x = [0.0]*self.n
+        for atom in self.state_atoms:
+            x[atom.index] = atom.x
+
+        self.save_state()
+
+        xss = fsolve(self.compute_odes, x, args=(0, sys))
+
+        # debug:
+        for i in range(self.n):
+            print(x[i]-xss[i])
+
+        self.restore_state()
+
+        for atom in self.state_atoms:
+
+            if abs(atom.x - xss[atom.index]) > atom.dq*ndq:
+                is_ss = False
+                break
+
+        if is_ss and apply_if_true:
+
+            for atom in self.state_atoms:
+                atom.x = xss[atom.index]
+                atom.q = atom.x
+
+            for atom in self.source_atoms:
+                atom.u()
+                atom.q = atom.x
+
+        return is_ss
 
     def advance(self):
 
@@ -1094,7 +1182,7 @@ class System(object):
                   plot_qss_updates=plot_qss_updates,
                   plot_ss_updates=plot_ss_updates, legend=legend)
 
-    def plot(self, *atoms, plot_qss=True, plot_ss=False,
+    def plot_old(self, *atoms, plot_qss=True, plot_ss=False,
              plot_qss_updates=False, plot_ss_updates=False, legend=False):
 
         if not atoms:
@@ -1107,26 +1195,29 @@ class System(object):
 
             ax1 = None
             ax2 = None
+
+            plt.subplot(r, c, j)
     
             if plot_qss or plot_ss:
 
-                plt.subplot(r, c, j)
                 ax1 = plt.gca()
-                ax1.set_ylabel("{} ({})".format(atom.full_name(), atom.units), color='b')
+                ax1.set_ylabel("{} ({})".format(atom.full_name(), atom.units),
+                               color='b')
                 ax1.grid()
+
+            if plot_qss_updates or plot_ss_updates:
+                ax2 = ax1.twinx()
+                ax2.set_ylabel('updates', color='r')
 
             if plot_qss:
                 ax1.plot(atom.tzoh, atom.qzoh, 'b-', label="qss_q")
 
             if plot_ss:
                 ax1.plot(atom.tout_ss, atom.xout_ss, 'c--', label="ss_x")
-
-            if plot_qss_updates or plot_ss_updates:
-                ax2 = ax1.twinx()
-                ax2.set_ylabel('total updates', color='r')
                 
             if plot_qss_updates:
-                ax2.plot(atom.tout, atom.nupd, 'r-', label="qss_upds")
+                ax2.hist(atom.tout, 100)
+                #ax2.plot(atom.tout, atom.nupd, 'r-', label="qss updates")
 
             if plot_ss_updates:
                 ax2.plot(self.tout_ss, self.nupd_ss, 'm--', label="ss_upds")
@@ -1144,64 +1235,84 @@ class System(object):
         plt.tight_layout()
         plt.show()
 
-    def plot_groups(self, *groups, plot_qss=False, plot_ss=False, plot_ode=False, legend=True):
+    def plot(self, *atoms, plot_qss=False, plot_ss=False,
+                    plot_ode=False, plot_qss_updates=False, 
+                    plot_ss_updates=False, plot_ode_updates=False,
+                    legend=True):
 
-        #mpl.style.use('seaborn')
+        c, j = 1, 1
+        r = len(atoms)/c
 
-        if len(groups) > 1:
-            c, j = 2, 1
-            r = floor(len(groups)/2) + 1
+        if r % c > 0.0: r += 1
 
-        for group in groups:
+        nbins = 1000
 
-            if len(groups) > 1:
-                plt.subplot(r, c, j)
+        for i, atom in enumerate(atoms):
 
-            for i, atom in enumerate(group):
+            plt.subplot(r, c, j)
 
-                color = 'C{}'.format(i)
+            if plot_qss or plot_ss:
 
-                if plot_qss:
+                ax1 = plt.gca()
+                ax1.set_ylabel("{} ({})".format(atom.full_name(),
+                               atom.units), color='r')
+                ax1.grid()
 
-                    lbl = "{} qss ({})".format(atom.full_name(), atom.units)
+            if plot_qss_updates or plot_ss_updates:
 
-                    plt.plot(atom.tout, atom.qout,
-                             marker='.',
-                             markersize=6,
-                             markerfacecolor='none',
-                             markeredgecolor=color,
-                             markeredgewidth=0.8,
-                             linestyle='none',
-                             label=lbl)
+                ax2 = ax1.twinx()
+                ylabel = "updates"
+                ax2.set_ylabel(ylabel, color='b')
 
-                if plot_ss:
+            if plot_qss_updates:
 
-                    lbl = "{} ss ({})".format(atom.full_name(), atom.units)
+                label = "upds per {} s".format(atom.tout[-1]/nbins)
+                ax2.hist(atom.tout, nbins, alpha=0.5,
+                         color='b', label=label, density=False)
 
-                    plt.plot(atom.tout_ss, atom.xout_ss, 
-                             color=color,
-                             linewidth=0.8,
-                             linestyle='dashed',
-                             label=lbl)
+            if plot_ss_updates:
+                ax2.plot(self.tout_ss, self.nupd_ss, 'b', label="ss_upds")
 
-                if plot_ode:
+            if plot_qss:
 
-                    lbl = "{} ode ({})".format(atom.full_name(), atom.units)
+                lbl = "{} qss ({})".format(atom.full_name(), atom.units)
 
-                    plt.plot(atom.tout_ode, atom.xout_ode, 
-                             color=color,
-                             linewidth=0.8,
-                             linestyle='dashed',
-                             label=lbl)
+                ax1.plot(atom.tout, atom.qout,
+                         marker='.',
+                         markersize=4,
+                         markerfacecolor='none',
+                         markeredgecolor='r',
+                         markeredgewidth=0.5,
+                         linestyle='none',
+                         label=lbl)
 
-            if legend:
-                plt.legend()
+            if plot_ss:
+
+                lbl = "{} ss ({})".format(atom.full_name(), atom.units)
+
+                ax1.plot(atom.tout_ss, atom.xout_ss, 
+                         color='r',
+                         linewidth=1.0,
+                         linestyle='dashed',
+                         label=lbl)
+
+            if plot_ode:
+
+                lbl = "{} ode ({})".format(atom.full_name(), atom.units)
+
+                ax1.plot(atom.tout_ode, atom.xout_ode, 
+                         color='k',
+                         alpha=0.6,
+                         linewidth=1.0,
+                         linestyle='dashed',
+                         label=lbl)
+
+            lines1, labels1 = ax1.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax2.legend(lines1+lines2, labels1+labels2)
 
             plt.xlabel("t (s)")
-            plt.grid()
- 
-            if len(groups) > 1:
-                j += 1
+            j += 1
 
         plt.tight_layout()
         plt.show()
@@ -1289,27 +1400,30 @@ class Connection(object):
     """Connection between atoms.
     """
 
-    def __init__(self, atom, other, coefficient=1.0, coeffunc=None, coefobj=None):
+    def __init__(self, atom, other, coefficient=1.0, coeffunc=None):
 
         self.atom = atom
         self.other = other
         self.coefficient = coefficient
         self.coeffunc = coeffunc
-        self.coefobj = coefobj
+        self.device = None
 
         self.other.broadcast_to.append(self.atom)
 
     def compute_coefficient(self):
 
         if self.coeffunc:
-            if self.coefobj:
-                return self.coeffunc(self.coefobj)
+            return self.coeffunc(self.device)
         else:
             return self.coefficient                                                  
 
     def value(self):
 
-        return self.compute_coefficient() * self.other.q
+        if isinstance(self.other, StateAtom):
+            return self.compute_coefficient() * self.other.q
+
+        elif isinstance(self.other, SourceAtom):
+            return self.compute_coefficient() * self.other.u()
 
 
 # ============================ Basic Devices ===================================
@@ -1322,8 +1436,7 @@ class GroundNode(Device):
         Device.__init__(self, name)
 
         self.atom = SourceAtom(name="source", source_type=SourceType.CONSTANT,
-                                 lim_type=LimAtomType.GROUND_NODE, x0=0.0,
-                                 units="V", is_linear=True)
+                               x0=0.0, units="V", is_linear=True, dq=1.0)
 
         self.add_atom(self.atom)
 
@@ -1335,8 +1448,7 @@ class ConstantSourceNode(Device):
         Device.__init__(self, name)
 
         self.atom = SourceAtom(name="source", source_type=SourceType.CONSTANT,
-                                 lim_type=LimAtomType.VOLTAGE_SOURCE, x0=v0,
-                                 units="V", is_linear=True)
+                               x0=v0, units="V", is_linear=True, dq=1.0)
 
         self.add_atom(self.atom)
 
@@ -1369,53 +1481,49 @@ class LimNode(Device):
 
     """
 
-    def __init__(self, name, c, g=0.0, h0=0.0, v0=0.0, source_type=SourceType.CONSTANT,
-                 h1=0.0, h2=0.0, ha=0.0, freq=0.0, phi=0.0, duty=0.0,
-                 t1=0.0, t2=0.0, dq=None, is_linear=True):
+    def __init__(self, name, c, g=0.0, h0=0.0, v0=0.0,
+                 source_type=SourceType.CONSTANT, h1=0.0, h2=0.0, ha=0.0,
+                 freq=0.0, phi=0.0, duty=0.0, t1=0.0, t2=0.0, dq=None,
+                 is_linear=True):
 
         Device.__init__(self, name)
 
         self.c = c
         self.g = g
 
-        self.source = SourceAtom("source", lim_type=LimAtomType.CURRENT_SOURCE,
-                                 source_type=source_type, x0=h0, x1=h1,
-                                 x2=h2, xa=ha, freq=freq, phi=phi, duty=duty,
-                                 t1=t1, t2=t2, dq=dq, units="A")
+        self.source = SourceAtom("source", source_type=source_type, x0=h0,
+                                 x1=h1, x2=h2, xa=ha, freq=freq, phi=phi,
+                                 duty=duty, t1=t1, t2=t2, dq=dq, units="A")
 
-        self.atom = StateAtom("state", lim_type=LimAtomType.LATENCY_NODE,
-                              x0=0.0, coeffunc=self.aii, coefobj=self, 
-                              dq=dq, units="V")
+        self.atom = StateAtom("state", x0=0.0, coeffunc=self.aii, dq=dq,
+                              units="V")
 
         self.add_atoms(self.source, self.atom)
 
-        self.atom.add_connection(self.source, coeffunc=self.bii, coefobj=self)
+        self.atom.add_connection(self.source, coeffunc=self.bii)
 
     def connect(self, branch, terminal="i"):
 
         if terminal == "i":
-            self.atom.add_connection(branch.atom, coeffunc=self.aij, coefobj=self)
+            self.atom.add_connection(branch.atom, coeffunc=self.aij)
+
         elif terminal == "j":
-            self.atom.add_connection(branch.atom, coeffunc=self.aji, coefobj=self)
+            self.atom.add_connection(branch.atom, coeffunc=self.aji)
         
     @staticmethod
     def aii(self):
-        
         return -self.g / self.c
 
     @staticmethod
     def bii(self):
-        
         return 1.0 / self.c
 
     @staticmethod
     def aij(self):
-        
         return -1.0 / self.c
 
     @staticmethod
     def aji(self):
-        
         return 1.0 / self.c
 
 
@@ -1452,42 +1560,36 @@ class LimBranch(Device):
         self.l = l
         self.r = r
 
-        self.source = SourceAtom("source", lim_type=LimAtomType.VOLTAGE_SOURCE,
-                                 source_type=source_type, x0=e0, x1=e1,
-                                 x2=e2, xa=ea, freq=freq, phi=phi, duty=duty,
-                                 t1=t1, t2=t2, dq=dq, units="V")
+        self.source = SourceAtom("source", source_type=source_type, x0=e0,
+                                 x1=e1, x2=e2, xa=ea, freq=freq, phi=phi,
+                                 duty=duty, t1=t1, t2=t2, dq=dq, units="V")
 
-        self.atom = StateAtom("state", lim_type=LimAtomType.LATENCY_BRANCH,
-                              x0=0.0, coeffunc=self.aii, coefobj=self, 
-                              dq=dq, units="A")
+        self.atom = StateAtom("state", x0=0.0, coeffunc=self.aii, dq=dq,
+                              units="A")
 
         self.add_atoms(self.source, self.atom)
 
-        self.atom.add_connection(self.source, coeffunc=self.bii, coefobj=self)
+        self.atom.add_connection(self.source, coeffunc=self.bii)
 
     def connect(self, inode, jnode):
 
-        self.atom.add_connection(inode.atom, coeffunc=self.aij, coefobj=self)
-        self.atom.add_connection(jnode.atom, coeffunc=self.aji, coefobj=self)
+        self.atom.add_connection(inode.atom, coeffunc=self.aij)
+        self.atom.add_connection(jnode.atom, coeffunc=self.aji)
         
     @staticmethod
     def aii(self):
-        
         return -self.r / self.l
 
     @staticmethod
     def bii(self):
-        
         return 1.0 / self.l
 
     @staticmethod
     def aij(self):
-        
         return 1.0 / self.l
 
     @staticmethod
     def aji(self):
-        
         return -1.0 / self.l
 
 
@@ -1497,15 +1599,12 @@ class LimBranch(Device):
 class GroundNodeDQ(Device):
 
     """
-          noded    nodeq
-            o        o
-            |        |
-      .-----+--------+-----.
-      |     |        |     |
-      |    _|_      _|_    |
-      |     -        -     |
-      '--------------------'
-    
+          noded     nodeq
+            o         o
+            |         |
+            '----+----'
+                _|_
+                 - 
     """
 
 
@@ -1514,12 +1613,10 @@ class GroundNodeDQ(Device):
         Device.__init__(self, name)
 
         self.atomd = SourceAtom(name="vd", source_type=SourceType.CONSTANT,
-                                lim_type=LimAtomType.GROUND_NODE, x0=0.0,
-                                units="V", is_linear=True)
+                                x0=0.0, units="V", is_linear=True, dq=1.0)
 
         self.atomq = SourceAtom(name="vq", source_type=SourceType.CONSTANT,
-                                lim_type=LimAtomType.GROUND_NODE, x0=0.0,
-                                units="V", is_linear=True)
+                                x0=0.0, units="V", is_linear=True, dq=1.0)
 
         self.add_atoms(self.atomd, self.atomq)
 
@@ -1542,11 +1639,11 @@ class LimBranchDQ(Device):
                  '-------------------------------------'
     """
 
-    def __init__(self, name, l, r=0.0, vd0=0.0, vq0=0.0, w=60.0*pi, id0=0.0, iq0=0.0,
-                 source_type=SourceType.CONSTANT, 
+    def __init__(self, name, l, r=0.0, vd0=0.0, vq0=0.0, w=60.0*pi, id0=0.0,
+                 iq0=0.0, source_type=SourceType.CONSTANT, 
                  vd1=0.0, vd2=0.0, vda=0.0, freqd=0.0, phid=0.0, dutyd=0.0,
                  td1=0.0, td2=0.0, vq1=0.0, vq2=0.0, vqa=0.0,
-                 freqq=0.0, phiq=0.0, dutyq=0.0, tq1=0.0, tq2=0.0, dq=None):
+                 freqq=0.0, phiq=0.0, dutyq=0.0, tq1=0.0, tq2=0.0, dq=1e0):
 
         Device.__init__(self, name)
 
@@ -1556,59 +1653,52 @@ class LimBranchDQ(Device):
         self.id0 = id0
         self.iq0 = iq0
 
-        self.sourced = SourceAtom("vd", lim_type=LimAtomType.VOLTAGE_SOURCE,
-                                 source_type=source_type, x0=vd0, x1=vd1,
-                                 x2=vd2, xa=vda, freq=freqd, phi=phid, duty=dutyd,
-                                 t1=td1, t2=td2, dq=dq, units="V")
+        dmax = 1e8
 
-        self.sourceq = SourceAtom("vq", lim_type=LimAtomType.VOLTAGE_SOURCE,
-                                 source_type=source_type, x0=vq0, x1=vq1,
-                                 x2=vq2, xa=vqa, freq=freqq, phi=phiq, duty=dutyq,
-                                 t1=tq1, t2=tq2, dq=dq, units="V")
+        self.sourced = SourceAtom("vd", source_type=source_type, x0=vd0, x1=vd1,
+                                 x2=vd2, xa=vda, freq=freqd, phi=phid, dmax=dmax,
+                                 duty=dutyd, t1=td1, t2=td2, dq=dq, units="V")
 
-        self.atomd = StateAtom("id", lim_type=LimAtomType.LATENCY_BRANCH,
-                              x0=id0, coeffunc=self.aii, coefobj=self, 
-                              dq=dq, units="A")
+        self.sourceq = SourceAtom("vq", source_type=source_type, x0=vq0, x1=vq1,
+                                 x2=vq2, xa=vqa, freq=freqq, phi=phiq, dmax=dmax,
+                                 duty=dutyq, t1=tq1, t2=tq2, dq=dq, units="V")
 
-        self.atomq = StateAtom("iq", lim_type=LimAtomType.LATENCY_BRANCH,
-                              x0=iq0, coeffunc=self.aii, coefobj=self, 
-                              dq=dq, units="A")
+        self.atomd = StateAtom("id", x0=id0, coeffunc=self.aii, dq=dq, dmax=dmax,
+                               units="A")
+
+        self.atomq = StateAtom("iq", x0=iq0, coeffunc=self.aii, dq=dq, dmax=dmax,
+                               units="A")
 
         self.add_atoms(self.sourced, self.sourceq, self.atomd, self.atomq)
 
-        self.atomd.add_connection(self.sourced, coeffunc=self.bii, coefobj=self)
-        self.atomq.add_connection(self.sourceq, coeffunc=self.bii, coefobj=self)
+        self.atomd.add_connection(self.sourced, coeffunc=self.bii)
+        self.atomq.add_connection(self.sourceq, coeffunc=self.bii)
 
-    def connect(self, inode, jnode):
+    def connect(self, inodedq, jnodedq):
 
-        self.atomd.add_connection(inode.atomd, coeffunc=self.aij, coefobj=self)
-        self.atomd.add_connection(jnode.atomd, coeffunc=self.aji, coefobj=self)
-        self.atomq.add_connection(inode.atomq, coeffunc=self.aij, coefobj=self)
-        self.atomq.add_connection(jnode.atomq, coeffunc=self.aji, coefobj=self)
+        self.atomd.add_connection(inodedq.atomd, coeffunc=self.aij)
+        self.atomd.add_connection(jnodedq.atomd, coeffunc=self.aji)
+        self.atomq.add_connection(inodedq.atomq, coeffunc=self.aij)
+        self.atomq.add_connection(jnodedq.atomq, coeffunc=self.aji)
 
     @staticmethod
     def u(self, t):
-
         return 0.0  # todo
 
     @staticmethod
     def aii(self):
-        
         return -(self.r + self.w * self.l) / self.l
 
     @staticmethod
     def bii(self):
-        
         return 1.0 / self.l
 
     @staticmethod
     def aij(self):
-        
         return 1.0 / self.l
 
     @staticmethod
     def aji(self):
-        
         return -1.0 / self.l
 
 
@@ -1633,11 +1723,11 @@ class LimNodeDQ(Device):
     '--------------------------------------------------------------------------'
     """
 
-    def __init__(self, name, c, g=0.0, id0=0.0, iq0=0.0, w=60.0*pi, vd0=0.0, vq0=0.0,
-                 source_type=SourceType.CONSTANT, 
-                 id1=0.0, id2=0.0, ida=0.0, freqd=0.0, phid=0.0, dutyd=0.0,
-                 td1=0.0, td2=0.0, iq1=0.0, iq2=0.0, iqa=0.0,
-                 freqq=0.0, phiq=0.0, dutyq=0.0, tq1=0.0, tq2=0.0, dq=None):
+    def __init__(self, name, c, g=0.0, id0=0.0, iq0=0.0, w=60.0*pi, vd0=0.0,
+                 vq0=0.0, source_type=SourceType.CONSTANT, id1=0.0, id2=0.0,
+                 ida=0.0, freqd=0.0, phid=0.0, dutyd=0.0, td1=0.0, td2=0.0,
+                 iq1=0.0, iq2=0.0, iqa=0.0, freqq=0.0, phiq=0.0, dutyq=0.0,
+                 tq1=0.0, tq2=0.0, dq=None):
 
         Device.__init__(self, name)
 
@@ -1647,73 +1737,64 @@ class LimNodeDQ(Device):
         self.vd0 = vd0
         self.vq0 = vq0
 
-        self.sourced = SourceAtom("id", lim_type=LimAtomType.CURRENT_SOURCE,
-                                  source_type=source_type, x0=id0, x1=id1,
-                                  x2=id2, xa=ida, freq=freqd, phi=phid, duty=dutyd,
-                                  t1=td1, t2=td2, dq=dq, units="A")
+        self.sourced = SourceAtom("id", source_type=source_type, x0=id0, x1=id1,
+                                  x2=id2, xa=ida, freq=freqd, phi=phid,
+                                  duty=dutyd, t1=td1, t2=td2, dq=dq, units="A")
 
-        self.sourceq = SourceAtom("iq", lim_type=LimAtomType.CURRENT_SOURCE,
-                                  source_type=source_type, x0=iq0, x1=iq1,
-                                  x2=iq2, xa=iqa, freq=freqq, phi=phiq, duty=dutyq,
-                                  t1=tq1, t2=tq2, dq=dq, units="A")
+        self.sourceq = SourceAtom("iq", source_type=source_type, x0=iq0, x1=iq1,
+                                  x2=iq2, xa=iqa, freq=freqq, phi=phiq,
+                                  duty=dutyq, t1=tq1, t2=tq2, dq=dq, units="A")
 
-        self.atomd = StateAtom("stated", lim_type=LimAtomType.LATENCY_NODE,
-                               x0=vd0, coeffunc=self.aii, coefobj=self, 
-                               dq=dq, units="V")
+        self.atomd = StateAtom("stated", x0=vd0, coeffunc=self.aii, dq=dq,
+                               units="V")
 
-        self.atomq = StateAtom("stateq", lim_type=LimAtomType.LATENCY_NODE,
-                              x0=vq0, coeffunc=self.aii, coefobj=self, 
-                              dq=dq, units="V")
+        self.atomq = StateAtom("stateq", x0=vq0, coeffunc=self.aii, dq=dq,
+                               units="V")
 
         self.add_atoms(self.sourced, self.sourceq, self.atomd, self.atomq)
 
-        self.atomd.add_connection(self.sourced, coeffunc=self.bii, coefobj=self)
-        self.atomq.add_connection(self.sourceq, coeffunc=self.bii, coefobj=self)
+        self.atomd.add_connection(self.sourced, coeffunc=self.bii)
+        self.atomq.add_connection(self.sourceq, coeffunc=self.bii)
 
     def connect(self, branch, terminal="i"):
 
         if terminal == "i":
-            self.atomd.add_connection(branch.atomd, coeffunc=self.aij, coefobj=self)
-            self.atomq.add_connection(branch.atomq, coeffunc=self.aij, coefobj=self)
+            self.atomd.add_connection(branch.atomd, coeffunc=self.aij)
+            self.atomq.add_connection(branch.atomq, coeffunc=self.aij)
         elif terminal == "j":
-            self.atomd.add_connection(branch.atomd, coeffunc=self.aji, coefobj=self)
-            self.atomq.add_connection(branch.atomq, coeffunc=self.aji, coefobj=self)
+            self.atomd.add_connection(branch.atomd, coeffunc=self.aji)
+            self.atomq.add_connection(branch.atomq, coeffunc=self.aji)
 
     @staticmethod
     def aii(self):
-        
         return -(self.g + self.w * self.c) / self.c
 
     @staticmethod
     def bii(self):
-        
         return 1.0 / self.c
 
     @staticmethod
     def aij(self):
-        
         return -1.0 / self.c
 
     @staticmethod
     def aji(self):
-        
         return 1.0 / self.c
 
 
-class SyncMachineReducedDQ(Device):
+class SyncMachineDQ(Device):
 
-    """Synchronous Machine Reduced DQ Model
-
-    Includes a built-in turbine/governor physics and control model
+    """Synchronous Machine Reduced DQ Model as voltage source
 
     """
 
-    def __init__(self, name, Psm=25.0e6, VLL=4160.0, wmb=60.0*pi,
+    def __init__(self, name, Psm=25.0e6, VLL=4160.0, ws=60.0*pi,
                  P=4.00, pf=0.80, rs=3.00e-3, Lls=0.20e-3, Lmq=2.00e-3,
                  Lmd=2.00e-3, rkq=5.00e-3, Llkq=0.04e-3, rkd=5.00e-3,
                  Llkd=0.04e-3, rfd=20.0e-3, Llfd=0.15e-3, vfdb=90.1, Kp=10.0e4,
-                 Ki=10.0e4, J=4221.7, fkq0=0.0, fkd0=0.0, ffd0=0.0, wrm0=0.0,
-                 th0=0.0, dq=1e-3):
+                 Ki=10.0e4, J=4221.7, fkq0=0.0, fkd0=0.0, ffd0=0.0, wr0=60.0*pi,
+                 th0=0.0, iqs0=0.0, ids0=0.0, dq_flux=1e-2, dq_wr=1e-1, dq_th=1e-3,
+                 dq_v=1e0):
 
         self.name = name
 
@@ -1721,7 +1802,7 @@ class SyncMachineReducedDQ(Device):
 
         self.Psm  = Psm  
         self.VLL  = VLL  
-        self.wmb  = wmb 
+        self.ws   = ws  
         self.P    = P    
         self.pf   = pf  
         self.rs   = rs  
@@ -1747,12 +1828,10 @@ class SyncMachineReducedDQ(Device):
         self.fkq0 = fkq0 
         self.fkd0 = fkd0 
         self.ffd0 = ffd0 
-        self.wrm0 = wrm0 
-        self.th0  = th0   
-
-        # qdl params:
-
-        self.dq = dq
+        self.wr0 = wr0 
+        self.th0  = th0  
+        
+        dmax = 1e8
 
         # call super:
 
@@ -1761,124 +1840,140 @@ class SyncMachineReducedDQ(Device):
         # derived:
 
         self.Lq = Lls + (Lmq * Llkq) / (Llkq + Lmq)
-        self.Ld = Lls + (Lmd * Llfd * Llkd) / (Lmd * Llfd + Lmd * Llkd + Llfd * Llkd)
 
-        # atoms:
+        self.Ld = (Lls + (Lmd * Llfd * Llkd)
+                   / (Lmd * Llfd + Lmd * Llkd + Llfd * Llkd))
 
-        self.fkq = StateAtom("fkq", x0=fkq0, derfunc=self.dfkq, derobj=self, units="Wb",    dq=dq)
-        self.fkd = StateAtom("fkd", x0=fkd0, derfunc=self.dfkd, derobj=self, units="Wb",    dq=dq)
-        self.ffd = StateAtom("ffd", x0=ffd0, derfunc=self.dffd, derobj=self, units="Wb",    dq=dq)
-        self.wrm = StateAtom("wrm", x0=wrm0, derfunc=self.dwrm, derobj=self, units="rad/s", dq=dq)
-        self.th  = StateAtom("th",  x0=th0,  derfunc=self.dth,  derobj=self, units="rad",   dq=dq)
+        # source atoms:
 
-        self.add_atoms(self.fkq, self.fkd, self.ffd, self.wrm, self.th)
+        self.atomd = SourceAtom("vd", source_type=SourceType.FUNCTION, 
+                                srcfunc=self.vds, dq=dq_v, units="V", dmax=dmax)
+
+        self.atomq = SourceAtom("vq", source_type=SourceType.FUNCTION, 
+                                srcfunc=self.vqs, dq=dq_v, units="V", dmax=dmax)
+
+        # state atoms:
+
+        self.fkq = StateAtom("fkq", x0=fkq0, derfunc=self.dfkq, units="Wb", dq=dq_flux, dmax=dmax)
+        self.fkd = StateAtom("fkd", x0=fkd0, derfunc=self.dfkd, units="Wb", dq=dq_flux, dmax=dmax)
+        self.ffd = StateAtom("ffd", x0=ffd0, derfunc=self.dffd, units="Wb", dq=dq_flux, dmax=dmax)
+        self.wr = StateAtom("wr", x0=wr0, derfunc=self.dwr, units="rad/s", dq=dq_wr, dmax=dmax)
+        self.th = StateAtom("th", x0=th0, derfunc=self.dth, units="rad", dq=dq_th, dmax=dmax)
+
+        self.add_atoms(self.atomd, self.atomq, self.fkq, self.fkd, self.ffd,
+                       self.wr, self.th)
+
+        # vds:
+        self.atomd.add_connection(self.wr)
+        self.atomd.add_connection(self.fkd)
+        self.atomd.add_connection(self.ffd)
+
+        # vqs:
+        self.atomq.add_connection(self.wr)
+        self.atomq.add_connection(self.fkq)
 
         self.fkd.add_connection(self.ffd)
+
         self.ffd.add_connection(self.fkd)
-        self.wrm.add_connection(self.fkq, self.fkd, self.ffd, self.th)
-        self.th.add_connection(self.wrm)
 
-        self.atomd = SourceAtom("vd", lim_type=LimAtomType.VOLTAGE_SOURCE,
-                                source_type=SourceType.FUNCTION,
-                                srcfunc=self.vds, srcobj=self, units="V")
+        self.wr.add_connection(self.fkq)
+        self.wr.add_connection(self.fkd)
+        self.wr.add_connection(self.ffd)
+        self.wr.add_connection(self.th)
 
-        self.atomq = SourceAtom("vq", lim_type=LimAtomType.VOLTAGE_SOURCE,
-                                source_type=SourceType.FUNCTION,
-                                srcfunc=self.vqs, srcobj=self, units="V")
+        self.th.add_connection(self.wr)
 
-        # viewables:
-
-        #self.vd = qdl.Atom("sm.vd", source_type=qdl.SourceType.FUNCTION, srcfunc=self.vds, srcdt=1e-1, units="V")
-        #self.vq = qdl.Atom("sm.vq", source_type=qdl.SourceType.FUNCTION, srcfunc=self.vqs, srcdt=1e-1, units="V")
-        #self.te = qdl.Atom("sm.te", source_type=qdl.SourceType.FUNCTION, srcfunc=self.Te,  srcdt=1e-1, units="N.m")
-        #self.tm = qdl.Atom("sm.tm", source_type=qdl.SourceType.FUNCTION, srcfunc=self.Tm,  srcdt=1e-1, units="N.m")
-        #
-        #self.add_atoms(self.vd, self.vq, self.te, self.tm)
-
-        # branch connections:
-        self.branchd_connections = []
-        self.branchq_connections = []
+        # for branch connections:
+        self.connectiond = []
+        self.connectionq = []
 
     def connect(self, branch, terminal="i"):
 
         if terminal == "i":
-            bd = self.fkd.add_connection(branch.atomd, coefficient=1.0)
-            bq = self.fkq.add_connection(branch.atomq, coefficient=1.0)
+
+            self.connectiond.append(self.atomd.add_connection(branch.atomd, 1.0))
+            self.connectionq.append(self.atomq.add_connection(branch.atomq, 1.0))
+
         elif terminal == "j":
-            bd = self.fkd.add_connection(branch.atomd, coefficient=-1.0)
-            bq = self.fkq.add_connection(branch.atomq, coefficient=-1.0)
 
-        self.branchd_connections.append(bd)
-        self.branchq_connections.append(bq)
+            self.connectiond.append(self.atomd.add_connection(branch.atomd, -1.0))
+            self.connectionq.append(self.atomq.add_connection(branch.atomq, -1.0))
 
-    def iqs(self):
+        self.fkq.add_connection(branch.atomq)
+        self.fkd.add_connection(branch.atomd)
+        self.ffd.add_connection(branch.atomd)
+        self.wr.add_connection(branch.atomd)
+        self.wr.add_connection(branch.atomq)
 
-        isum = 0.0
-        for connection in self.branchq_connections:
-            isum -= connection.value()
-        return isum
-        
     def ids(self):
-
-        isum = 0.0
-        for connection in self.branchd_connections:
-            isum -= connection.value()
-        return isum
-
-    @staticmethod
-    def vqs(self, t):
-        return (self.rs * self.iqs() + self.wrm.q * self.Ld * self.ids() +
-                self.wrm.q * self.fd())
-
-    @staticmethod
-    def vds(self, t):
-        return (self.rs * self.ids() - self.wrm.q * self.Lq * self.iqs() -
-                self.wrm.q * self.fq())
+        if self.connectiond: 
+            return sum([x.value() for x in self.connectiond])
+        else:
+            return 0.0
+        
+    def iqs(self):
+        if self.connectionq: 
+            return sum([x.value() for x in self.connectionq])
+        else:
+            return 0.0
 
     def vfd(self):
         return self.vfdb
 
-    def fq(self):
-        return self.Lmq / (self.Lmq + self.Llkq) * self.fkq.q
+    def fq(self, fkq):
+        return self.Lmq / (self.Lmq + self.Llkq) * fkq
 
-    def fd(self):
-        return (self.Lmd * (self.fkd.q / self.Llkd + self.ffd.q / self.Llfd) /
+    def fd(self, fkd, ffd):
+        return (self.Lmd * (fkd / self.Llkd + ffd / self.Llfd) /
                 (1.0 + self.Lmd / self.Llfd + self.Lmd / self.Llkd))
 
-    def fqs(self):
-        return self.Lq * self.iqs() + self.fq()
+    def fqs(self, fkq):
+        return self.Lq * self.iqs() + self.fq(fkq)
 
-    def fds(self):
-        return self.Ld * self.ids() + self.fd()
+    def fds(self, fkd, ffd):
+        return self.Ld * self.ids() + self.fd(fkd, ffd)
 
-    def Te(self):
-        return 3.0 * self.P / 4.0 * (self.fds() * self.iqs() - self.fqs() * self.ids())
+    def Te(self, fkq, fkd, ffd):
+        return (3.0 * self.P / 4.0 * (self.fds(fkd, ffd) * self.iqs() 
+                                      - self.fqs(fkq) * self.ids()))
 
-    def Tm(self, wrm):
-        return self.Kp * (self.wmb - wrm) + self.Ki * self.th.q
+    def Tm(self, wr, th):
+        return -(self.Kp * (self.ws - wr) + self.Ki * th)
 
     @staticmethod
-    def dfkq(self, fkq):
-        return (-self.rkq / self.Llkq * (fkq - self.Lq * self.iqs() -
-                self.fq() + self.Lls * self.iqs()))
+    def vqs(self, t):  # vqs relies on wr, fkd, ffd, ext_d, ext_q
+        return (self.rs * self.iqs() + self.wr.q * self.Ld * self.ids() +
+                self.wr.q * self.fd(self.fkd.q, self.ffd.q))
+
+    @staticmethod
+    def vds(self, t):  # vds relies on wr, fkq, ext_d, ext_q
+        return (self.rs * self.ids() - self.wr.q * self.Lq * self.iqs() +
+                self.wr.q * self.fq(self.fkq.q))
     
+    @staticmethod      
+    def dfkq(self, fkq):  # fkq relies on ext_q
+        return (-self.rkq / self.Llkq * (fkq - self.Lq * self.iqs() -
+                self.fq(fkq) + self.Lls * self.iqs()))
+
     @staticmethod
-    def dfkd(self, fkd):
+    def dfkd(self, fkd):  # fkd relies on ffd, ext_d
         return (-self.rkd / self.Llkd * (fkd - self.Ld * self.ids() + 
-                self.fd() - self.Lls * self.ids()))
+                self.fd(fkd, self.ffd.q) - self.Lls * self.ids()))
 
     @staticmethod
-    def dffd(self, ffd):
+    def dffd(self, ffd):  # ffd relies on fkd, ext_d
         return (self.vfd() - self.rfd / self.Llfd * (ffd - self.Ld *
-                self.ids() + self.fd() - self.Lls * self.ids()))
+                self.ids() + self.fd(self.fkd.q, ffd) - self.Lls *
+                self.ids()))
 
     @staticmethod
-    def dwrm(self, wrm):
-        return (self.Te() - self.Tm(wrm)) / self.J
+    def dwr(self, wr):  # wr relies on fkq, fkd, ffd, wr, ext_q, ext_d
+        return (self.Te(self.fkq.q, self.fkd.q, self.ffd.q)
+                - self.Tm(wr, self.th.q)) / self.J
 
     @staticmethod
-    def dth(self, th):
-        return self.wmb - self.wrm.q
+    def dth(self, th): # th relies on wr
+        return self.ws - self.wr.q
 
 
 # =============================== Tests ========================================
@@ -1968,7 +2063,7 @@ def test2():
 
 def test3():
 
-    sys = System(dq=1e-3)
+    sys = System(dq=None)
 
     ground = GroundNodeDQ("ground")
     node1 = LimNodeDQ("node1", 0.001, 0.01, 0.0, 0.0)
@@ -1990,7 +2085,7 @@ def test3():
     tstop = 0.1
     dc = True
 
-    sys.init_ode(dt=1.0e-4, dc=dc)
+    sys.init_ode(dt=1.0e-3, dc=dc)
     sys.init_qss(dc=dc)
 
     sys.run_ode(tstop*0.1)
@@ -2002,35 +2097,58 @@ def test3():
     sys.run_ode(tstop)
     sys.run_qss(tstop)
 
-    sys.plot_groups((node1.atomd, node1.atomq), plot_ode=True)
-    sys.plot_groups((branch1.atomd, branch1.atomq), plot_ode=True)
+    sys.plot((node1.atomd, node1.atomq), plot_ode=True)
+    sys.plot((branch1.atomd, branch1.atomq), plot_ode=True)
 
 
 def test4():
 
+    ws = 60*pi
+
     sys = System(dq=1e-3)
 
-    sm = SyncMachineReducedDQ("sm")
-    load = LimBranchDQ("load", 0.001, 0.01, 10.0, 2.0)
+    sm = SyncMachineDQ("sm", vfdb=3e4, dq_th=1e-4, dq_wr=1e-3, dq_flux=1e-4)
+    load = LimBranchDQ("load", l=3.6e-3, r=2.8, w=ws, dq=1e-1)
     gnd = GroundNodeDQ("gnd")   
 
     sys.add_devices(sm, load, gnd)
 
-    load.connect(gnd, sm)
-    sm.connect(load, terminal='j')
+    sm.connect(load, terminal="i")
+    load.connect(sm, gnd)
 
-    tstop = 0.01
-    dc = False
+    tstop = 20.0
+    dt = None
+    dc = True
+    ode = True 
+    qss = True
+    upds = True
 
-    sys.init_ode(dt=1.0e-4, dc=dc)
-    #sys.init_qss(dc=dc)
+    chk_ss = True
+    ndq = 100
 
-    sys.run_ode(tstop)
-    #sys.run_qss(tstop)
+    if qss: sys.init_qss(dc=dc)
+    if ode: sys.init_ode(dt=1.0e-3, dc=dc)
 
-    sys.plot_groups((sm.fkq, sm.fkd, sm.ffd), plot_ode=True, plot_qss=False)
-    sys.plot_groups((sm.wrm, sm.th), plot_ode=True, plot_qss=False)
-    sys.plot_groups((load.atom, load.atom), plot_ode=True, plot_qss=False)
+    if qss: sys.run_qss(tstop*0.2, reset_after=True)
+    if ode: sys.run_ode(tstop*0.2, reset_after=False)
+    
+    load.r = 1.0
+    
+    if qss: sys.run_qss(tstop, reset_after=True,
+                        chk_ss_period=chk_ss, chk_ss_ndq=ndq)
+
+    if ode: sys.run_ode(tstop, reset_after=False)
+    
+    if 1:
+        sys.plot(sm.atomd, sm.atomq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+        sys.plot(sm.wr, sm.th, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+        sys.plot(sm.fkq, sm.fkd, sm.ffd, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+        sys.plot(load.atomd, load.atomq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+
+    if 0:
+        with open(r"c:\temp\initcond.txt", "w") as f:
+            for atom in sys.atoms:
+                f.write("    {}0 = {}\n".format(atom.name, atom.x))
 
 
 if __name__ == "__main__":
