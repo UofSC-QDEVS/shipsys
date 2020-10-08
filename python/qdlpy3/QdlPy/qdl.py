@@ -183,8 +183,10 @@ class Atom(object):
         self.triggered = False  # reset triggered flag
 
         self.d = self.f()
-        self.d = max(self.d, -self.dmax*self.dq)
-        self.d = min(self.d, self.dmax*self.dq)
+
+        if self.sys.enable_slewrate:
+            self.d = max(self.d, -self.dmax*self.dq)
+            self.d = min(self.d, self.dmax*self.dq)
 
         self.dint()
         self.quantize()
@@ -399,6 +401,8 @@ class SourceAtom(Atom):
 
         # source derived quantities:
 
+        self.u = self.u0
+
         self.omega = 2.0 * pi * self.freq
 
         if self.freq:
@@ -413,27 +417,29 @@ class SourceAtom(Atom):
 
     def dint(self):
 
+        self.u_prev = self.u
+
         if self.source_type == SourceType.FUNCTION:
 
-            self.u = self.srcfunc(self.device, self.time)
+            u = self.srcfunc(self.device, self.time)
 
         elif self.source_type == SourceType.CONSTANT:
 
-            self.u = self.u0
+            u = self.u0
 
         elif self.source_type == SourceType.STEP:
 
             if self.time < self.t1:
-                self.u = self.u0
+                u = self.u0
             else:
-                self.u = self.u1
+                u = self.u1
 
         elif self.source_type == SourceType.SINE:
 
             if self.time >= self.t1:
-                self.u = self.u0 + self.ua*sin(self.omega*self.time + self.phi)
+                u = self.u0 + self.ua*sin(self.omega*self.time + self.phi)
             else:
-                self.u = self.u0
+                u = self.u0
 
         elif self.source_type == SourceType.PWM:
 
@@ -442,19 +448,28 @@ class SourceAtom(Atom):
         elif self.source_type == SourceType.RAMP:
 
             if self.time <= self.t1:
-                self.u = self.u1
+                u = self.u1
             elif self.time <= self.t2:
-                self.u = self.u1 + (self.time - self.t1) * self.d 
+                u = self.u1 + (self.time - self.t1) * self.d 
             else:
-                self.u = self.u2
+                u = self.u2
 
         elif self.source_type == SourceType.FUNCTION:
 
-            self.u = self.srcfunc()
+            u = self.srcfunc()
+
+        if self.sys.enable_slewrate:
+            if u > self.u_prev:
+                self.u = min(u, self.dmax * self.dq * (self.time - self.tlast) + self.u_prev)
+            elif u < self.u_prev:
+                self.u = max(u, -self.dmax * self.dq * (self.time - self.tlast) + self.u_prev)
+        else:
+            self.u = u
 
         self.tlast = self.time
 
         self.x = self.u
+        self.q = self.u
 
         return self.u
 
@@ -727,6 +742,18 @@ class System(object):
         self.iprint = 0   # for runtime updates
         self.print_time = print_time
         self.dt = 1e-4
+        self.enable_slewrate = False
+
+        # events:
+
+        self.events = {}
+
+    def schedule(self, func, time):
+
+        if not time in self.events:
+            self.events[time] = []
+
+        self.events[time].append(func)
 
     def add_device(self, device):
 
@@ -823,7 +850,8 @@ class System(object):
         self.time = t0
         self.dt = dt
 
-        if dc: self.solve_dc()
+        if dc:
+            self.solve_dc()
 
         for atom in self.state_atoms:   
             atom.initialize(self.time)
@@ -831,130 +859,130 @@ class System(object):
         for atom in self.source_atoms:   
             atom.initialize(self.time)
 
-    def run_ode(self, tstop, reset_after=True):
+    def run(self, tstop, ode=True, qss=True, fixed_dt=None, verbose=False):
 
-        self.tstop = tstop
+        # get the event times and event function lists, sorted by time:
 
-        if reset_after:
-            self.save_state()
+        sorted_events = sorted(self.events.items())
 
-        print("Non-linear ODE Simulation started...")
+        # add the last tstop event to the lists:
 
-        xi = [0.0]*self.n
-        for atom in self.state_atoms:
-            xi[atom.index] = atom.x
+        sorted_events.append((tstop, None))
 
-        t = np.arange(self.time, self.tstop, self.dt)
-        x = odeint(self.compute_odes, xi, t, args=(sys,))
+        # loop through the event stop points and solve:
+                                       
+        for time, events in sorted_events:
 
-        for i, tval in enumerate(t):
+            self.tstop = time
 
-            for atom in self.state_atoms:
-                atom.q = x[i, atom.index]
-                atom.save_ode(tval, atom.q)
+            if ode:
 
-            for atom in self.source_atoms:
-                atom.save_ode(tval, atom.dint())
+                print("Non-linear ODE Simulation started...")
 
-        for atom in self.state_atoms:
-            xf = x[-1, atom.index]
-            atom.x = xf
-            atom.q = xf
+                self.save_state()
+                self.enable_slewrate = False
 
-        for atom in self.source_atoms:
-            atom.dint()
-            atom.q = atom.q
+                xi = [0.0]*self.n
+                for atom in self.state_atoms:
+                    xi[atom.index] = atom.x
 
-        print("Non-linear ODE Simulation complete.")
+                t = np.arange(self.time, self.tstop, self.dt)
+                x = odeint(self.compute_odes, xi, t, args=(sys,))
 
-        if reset_after:
-            self.restore_state()
+                for i, tval in enumerate(t):
 
-    def run_qss(self, tstop, fixed_dt=None, verbose=False, reset_after=True,
-                chk_ss_period=None, chk_ss_ndq=None):
+                    for atom in self.state_atoms:
+                        atom.q = x[i, atom.index]
+                        atom.save_ode(tval, atom.q)
 
-        print("QSS Simulation started...")
-
-        if reset_after:
-            self.save_state()
-
-        self.tstop = tstop
-
-        ndq = 2
-        if chk_ss_ndq: ndq = chk_ss_ndq
-        check_ss_clock = 0.0
-        check_ss_tlast = self.tstop = tstop
-
-        # start by updating all atoms:
-
-        for i in range(1):
-            for atom in self.atoms:
-                atom.update(self.time)
-                atom.save()
-                atom.save()
-
-        if fixed_dt:
-
-            while(self.time <= self.tstop):
-
-                for atom in self.source_atoms:
-                    atom.step(self.time)
+                    for atom in self.source_atoms:
+                        atom.save_ode(tval, atom.dint())
 
                 for atom in self.state_atoms:
-                    atom.step(self.time)
+                    xf = x[-1, atom.index]
+                    atom.x = xf
+                    atom.q = xf
 
-                self.time += fixed_dt
+                for atom in self.source_atoms:
+                    atom.dint()
+                    atom.q = atom.q
 
-        else:
+                self.time = self.tstop
+                self.enable_slewrate = True
 
-            # now iterate over atoms until nothing triggered:
+                print("Non-linear ODE Simulation completed.")
 
-            i = 0
-            while i < _MAXITER:
-                triggered = False
-                for atom in self.atoms:
-                    if atom.triggered:
-                        triggered = True
+            if qss:
+
+                print("QSS Simulation started...")
+
+                if ode: self.restore_state()
+
+                # start by updating all atoms:
+
+                for i in range(1):
+                    for atom in self.atoms:
                         atom.update(self.time)
-                if not triggered:
-                    break
-                i += 1
+                        atom.save()
+                        atom.save()
 
-            # main simulation loop:
+                if fixed_dt:
 
-            tlast = self.time
-            last_print_time =  self.time
+                    while(self.time <= self.tstop):
 
-            while self.time < self.tstop:
+                        for atom in self.source_atoms:
+                            atom.step(self.time)
 
-                self.advance()
+                        for atom in self.state_atoms:
+                            atom.step(self.time)
 
-                if chk_ss_period:
-                    if check_ss_clock > chk_ss_period:
-                        check_ss_clock = 0.0
-                        self.check_steadystate(ndq=ndq)
+                        self.time += fixed_dt
 
-                if verbose and self.time-last_print_time > 0.1:
-                    print("t = {0:5.2f} s".format(self.time))
-                    last_print_time = self.time
+                else:
+                    # now iterate over atoms until nothing triggered:
 
-                check_ss_clock += self.time - tlast 
-                tlast = self.time
+                    i = 0
+                    while i < _MAXITER:
+                        triggered = False
+                        for atom in self.atoms:
+                            if atom.triggered:
+                                triggered = True
+                                atom.update(self.time)
+                        if not triggered:
+                            break
+                        i += 1
+
+                    # main simulation loop:
+
+                    tlast = self.time
+                    last_print_time =  self.time
+
+                    while self.time < self.tstop:
+
+                        self.advance()
+
+                        if verbose and self.time-last_print_time > 0.1:
+                            print("t = {0:5.2f} s".format(self.time))
+                            last_print_time = self.time
+
+                        tlast = self.time
                 
-            # force time to tstop and do one update at time = tstop:
+                    self.time = self.tstop
 
-            self.time = self.tstop
+                    for atom in self.atoms:
+                        atom.update(self.time)
+                        atom.save()
 
-            for atom in self.atoms:
-                atom.update(self.time)
-                atom.save()
+                print("QSS Simulation completed.")
 
-        if reset_after:
-            self.restore_state()
+            # call event delagate functions:
 
-        print("QSS Simulation complete.")
+            if events:
+                for event in events:
+                    event(self)
 
-    def check_steadystate(self, ndq=2, apply_if_true=True):
+
+    def check_steadystate(self, ndq=10, dmax=10, apply_if_true=True):
 
         is_ss = True
 
@@ -967,8 +995,8 @@ class System(object):
         xss = fsolve(self.compute_odes, x, args=(0, sys))
 
         # debug:
-        for i in range(self.n):
-            print(x[i]-xss[i])
+        #for i in range(self.n):
+        #    print(x[i]-xss[i])
 
         self.restore_state()
 
@@ -1079,17 +1107,68 @@ class System(object):
         plt.tight_layout()
         plt.show()
 
+    def plot_groups(self, *groups, plot_qss=False, plot_ss=False, plot_ode=False):
+
+        c, j = 1, 1
+        r = len(groups)/c
+
+        if r % c > 0.0: r += 1
+
+        for atoms in groups:
+
+            plt.subplot(r, c, j)
+
+            if plot_qss:
+
+                for i, atom in enumerate(atoms):
+
+                    color = "C{}".format(i)
+
+                    lbl = "{} qss ({})".format(atom.full_name(), atom.units)
+
+                    plt.plot(atom.tout, atom.qout,
+                             marker='.',
+                             markersize=4,
+                             markerfacecolor='none',
+                             markeredgecolor=color,
+                             markeredgewidth=0.5,
+                             linestyle='none',
+                             label=lbl)
+
+            if plot_ode:
+
+                for i, atom in enumerate(atoms):
+
+                    color = "C{}".format(i)
+
+                    lbl = "{} ode ({})".format(atom.full_name(), atom.units)
+
+                    plt.plot(atom.tout_ode, atom.xout_ode, 
+                             color=color,
+                             alpha=0.6,
+                             linewidth=1.0,
+                             linestyle='dashed',
+                             label=lbl)
+
+            plt.legend(loc="lower right")
+            plt.ylabel("atom state")
+            plt.xlabel("t (s)")
+            plt.grid()
+
+            j += 1
+
+        plt.tight_layout()
+        plt.show()
+
     def plot(self, *atoms, plot_qss=False, plot_ss=False,
                     plot_ode=False, plot_qss_updates=False, 
                     plot_ss_updates=False, plot_ode_updates=False,
-                    legend=True):
+                    legend=True, upd_bins=1000):
 
         c, j = 1, 1
         r = len(atoms)/c
 
         if r % c > 0.0: r += 1
-
-        nbins = 1000
 
         for i, atom in enumerate(atoms):
 
@@ -1110,8 +1189,8 @@ class System(object):
 
             if plot_qss_updates:
 
-                label = "upds per {} s".format(atom.tout[-1]/nbins)
-                ax2.hist(atom.tout, nbins, alpha=0.5,
+                label = "upds per {} s".format(atom.tout[-1]/upd_bins)
+                ax2.hist(atom.tout, upd_bins, alpha=0.5,
                          color='b', label=label, density=False)
 
             if plot_ss_updates:
@@ -1248,13 +1327,23 @@ class Connection(object):
     """Connection between atoms.
     """
 
-    def __init__(self, atom, other, coefficient=1.0, coeffunc=None):
+    def __init__(self, atom=None, other=None, coefficient=1.0, coeffunc=None):
 
         self.atom = atom
         self.other = other
+
         self.coefficient = coefficient
         self.coeffunc = coeffunc
+
         self.device = None
+
+        if atom and other:
+            self.reset_atoms(atom, other)
+
+    def reset_atoms(self, atom, other):
+
+        self.atom = atom
+        self.other = other
 
         self.other.broadcast_to.append(self.atom)
 
@@ -1267,11 +1356,14 @@ class Connection(object):
 
     def value(self):
 
-        if isinstance(self.other, StateAtom):
-            return self.compute_coefficient() * self.other.q
+        if self.other:
+            if isinstance(self.other, StateAtom):
+                return self.compute_coefficient() * self.other.q
 
-        elif isinstance(self.other, SourceAtom):
-            return self.compute_coefficient() * self.other.dint()
+            elif isinstance(self.other, SourceAtom):
+                return self.compute_coefficient() * self.other.dint()
+        else:
+            return 0.0
 
 
 # ============================ Basic Devices ===================================
@@ -1342,12 +1434,14 @@ class LimNode(Device):
                                  u1=h1, u2=h2, ua=ha, freq=freq, phi=phi,
                                  duty=duty, t1=t1, t2=t2, dq=dq, units="A")
 
-        self.atom = StateAtom("state", x0=0.0, coeffunc=self.aii, dq=dq,
+        self.atom = StateAtom("v", x0=0.0, coeffunc=self.aii, dq=dq,
                               units="V")
 
         self.add_atoms(self.source, self.atom)
 
         self.atom.add_connection(self.source, coeffunc=self.bii)
+
+        self.voltage = self.atom
 
     def connect(self, branch, terminal="i"):
 
@@ -1410,12 +1504,14 @@ class LimBranch(Device):
                                  u1=e1, u2=e2, ua=ea, freq=freq, phi=phi,
                                  duty=duty, t1=t1, t2=t2, dq=dq, units="V")
 
-        self.atom = StateAtom("state", x0=0.0, coeffunc=self.aii, dq=dq,
+        self.atom = StateAtom("i", x0=0.0, coeffunc=self.aii, dq=dq,
                               units="A")
 
         self.add_atoms(self.source, self.atom)
 
         self.atom.add_connection(self.source, coeffunc=self.bii)
+
+        self.i = self.atom
 
     def connect(self, inode, jnode):
 
@@ -1483,11 +1579,11 @@ class SourceNodeDQ(Device):
     """
 
 
-    def __init__(self, name, v, th0=0.0):
+    def __init__(self, name, voltage, th0=0.0):
 
         Device.__init__(self, name)
 
-        self.v = v
+        self.v = voltage
 
         self.vd0 = v * sin(th0)
         self.vq0 = v * cos(th0)
@@ -1639,36 +1735,34 @@ class LimNodeDQ(Device):
         self.vd0 = vd0
         self.vq0 = vq0
 
-        self.sourced = SourceAtom("id", source_type=source_type, u0=id0, u1=id1,
+        self.hd = SourceAtom("hd", source_type=source_type, u0=id0, u1=id1,
                                   u2=id2, ua=ida, freq=freqd, phi=phid,
                                   duty=dutyd, t1=td1, t2=td2, dq=dq, units="A")
 
-        self.sourceq = SourceAtom("iq", source_type=source_type, u0=iq0, u1=iq1,
+        self.hq = SourceAtom("hq", source_type=source_type, u0=iq0, u1=iq1,
                                   u2=iq2, ua=iqa, freq=freqq, phi=phiq,
                                   duty=dutyq, t1=tq1, t2=tq2, dq=dq, units="A")
 
-        self.atomd = StateAtom("stated", x0=vd0, coeffunc=self.aii, dq=dq,
-                               units="V")
+        self.vd = StateAtom("vd", x0=vd0, coeffunc=self.aii, dq=dq, units="V")
 
-        self.atomq = StateAtom("stateq", x0=vq0, coeffunc=self.aii, dq=dq,
-                               units="V")
+        self.vq = StateAtom("vq", x0=vq0, coeffunc=self.aii, dq=dq, units="V")
 
-        self.add_atoms(self.sourced, self.sourceq, self.atomd, self.atomq)
+        self.add_atoms(self.hd, self.hq, self.vd, self.vq)
 
-        self.atomd.add_connection(self.sourced, coeffunc=self.bii)
-        self.atomq.add_connection(self.sourceq, coeffunc=self.bii)
+        self.vd.add_connection(self.hd, coeffunc=self.bii)
+        self.vq.add_connection(self.hq, coeffunc=self.bii)
 
-        self.vd = self.atomd
-        self.vq = self.atomq
+        self.atomd = self.vd
+        self.atomq = self.vq
 
-    def connect(self, branch, terminal="i"):
+    def connect(self, device, terminal="i"):
 
         if terminal == "i":
-            self.atomd.add_connection(branch.atomd, coeffunc=self.aij)
-            self.atomq.add_connection(branch.atomq, coeffunc=self.aij)
+            self.vd.add_connection(device.atomd, coeffunc=self.aij)
+            self.vq.add_connection(device.atomq, coeffunc=self.aij)
         elif terminal == "j":
-            self.atomd.add_connection(branch.atomd, coeffunc=self.aji)
-            self.atomq.add_connection(branch.atomq, coeffunc=self.aji)
+            self.vd.add_connection(device.atomd, coeffunc=self.aji)
+            self.vq.add_connection(device.atomq, coeffunc=self.aji)
 
     @staticmethod
     def aii(self):
@@ -1885,13 +1979,21 @@ class SyncMachineDQ2(Device):
 
     """Synchronous Machine Reduced DQ Model as voltage source behind impedance.
 
-    vqs = rs*iq + wr*Ld*id + wr*fd
+    
+    [ vqs ] = [ Rs     wr*Ld ] * [ iqs ] + [ Lls  0   ] * [ diqs_dt ] + [ wr*fd ]
+    [ vds ]   [-wr*Lq  Rs    ]   [ ids ]   [ 0    Lls ]   [ dids_dt ]   [-wr*fq ]
 
-                               wr*Ld*ids  (j)
+    vqs = Rs*iqs + wr*Ld*ids + Lls*diqs + wr*fd
+    vds = Rs*ids - wr*Lq*iqs + Lls*dids - wr*fq
+
+    diqs = (1/Lls) * (vqs - Rs*iqs - wr*Ld*ids - wr*fd)
+    dids = (1/Lls) * (vds - Rs*ids + wr*Lq*iqs + wr*fq)  
+
+                               wr*Ld*ids 
                   Rs     Lls      ,^.
-            .----VVVV----UUUU----<- +>----o
+            .----VVVV----UUUU----<- +>----o (j)
             |         --->        `.'     +
-          +,-.        iqs                vqs
+          +,-.        iqs                vqs    
     wr*fq (   )                           -
           -`-'                            o
      (i)   _|_                           _|_
@@ -1899,17 +2001,14 @@ class SyncMachineDQ2(Device):
 
                                wr*Lq*iqs
                   Rs     Lls      ,^.
-            .----VVVV----UUUU----<+ ->----o
+            .----VVVV----UUUU----<+ ->----o (j)
             |         --->        `.'     +
-          +,-.        ids                vds
+          +,-.        ids                vds   
     wr*fd (   )                           -
           -`-'                            o
-           _|_                           _|_
+      (i)  _|_                           _|_
             -                             -
 
-                      
-     diqs*Lls = (1/Lls) * (wr*fq - iqs*Rs + wr*Ld*ids - vqs)
-     dids*Lls = (1/Lls) * (wr*fd - ids*Rs - wr*Lq*iqs - vds)
 
     """
 
@@ -2065,21 +2164,21 @@ class SyncMachineDQ2(Device):
     @staticmethod
     def diqs(self, iqs):  # iqs relies on ext_q, wr, ids, fkq
 
-
-        # diqs = (1/Lls) * (vqs - rs*iqs - wr*Ld*ids - wr*fd)
-        # dids = (1/Lls) * (vds - rs*ids - wr*Lq*iqs - wr*fq)
+        # diqs = (1/Lls) * (vqs - Rs*iqs - wr*Ld*ids - wr*fd)
 
         return (1.0 / self.Lls) * (self.vqs()
                                    - self.rs * iqs
                                    - self.wr.q * self.Ld * self.ids.q
-                                   - self.wr.q * self.fq(self.fkq.q))
+                                   - self.wr.q * self.fd(self.fkd.q, self.ffd.q))
     @staticmethod
     def dids(self, ids):  # ids relies on ext_d, wr, iqs, fkd
+
+       # dids = (1/Lls) * (vds - Rs*ids + wr*Lq*iqs + wr*fq) 
 
         return (1.0 / self.Lls) * (self.vds()
                                    - self.rs * ids
                                    + self.wr.q * self.Lq * self.iqs.q
-                                   + self.wr.q * self.fq(self.fkd.q))
+                                   + self.wr.q * self.fq(self.fkq.q))
     
     @staticmethod      
     def dfkq(self, fkq):  # fkq relies on iqs
@@ -2108,6 +2207,547 @@ class SyncMachineDQ2(Device):
         return self.ws - self.wr.q
 
 
+class SyncMachineDQ3(Device):
+
+    """7th order Synchronous Machine Model (5 fluxes, speed and angle states)
+
+    vd = id * Rs - wr * fq + d/dt * fd
+    vq = iq * Rs + wr * fd + d/dt * fq
+    vfd = d/dt * ffd + Rfd * ifd
+    0 = d/dt * fkd + Rkd * ikd
+    0 = d/dt * fkq + Rkq * ikq
+
+    [ fd  ]   [ Lmd+Lls  Lmd       Lmd      ]   [ id  ]
+    [ fkd ] = [ Lmd      Llkd+Lmd  Lmd      ] * [ ikd ]
+    [ ffd ]   [ Lmd      Lmd       Llfd+Lmd ]   [ ifd ]
+
+    [ fq  ] = [ Lmq+Lls  Lmq     ] * [ iq  ]
+    [ fkq ]   [ Lmq      Lmq+Lkq ]   [ ikq ]
+
+    """
+
+    def __init__(self, name, Psm=25.0e6, VLL=4160.0, ws=60.0*pi,
+                 P=4.00, pf=0.80, rs=3.00e-3, Lls=0.20e-3, Lmq=2.00e-3,
+                 Lmd=2.00e-3, rkq=5.00e-3, Llkq=0.04e-3, rkd=5.00e-3,
+                 Llkd=0.04e-3, rfd=20.0e-3, Llfd=0.15e-3, vfdb=90.1, Kp=10.0e4,
+                 Ki=10.0e4, J=4221.7, fq0=0.0, fkq0=0.0, fd0=0.0, fkd0=0.0,
+                 ffd0=0.0, wr0=60.0*pi, th0=0.0, iqs0=0.0, ids0=0.0,
+                 dq_current=1e-1, dq_flux=1e-2, dq_wr=1e-1, dq_th=1e-3, dq_v=1e0):
+
+        self.name = name
+
+        # sm params:
+
+        self.Psm  = Psm  
+        self.VLL  = VLL  
+        self.ws   = ws  
+        self.P    = P    
+        self.pf   = pf  
+        self.rs   = rs  
+        self.Lls  = Lls 
+        self.Lmq  = Lmq 
+        self.Lmd  = Lmd 
+        self.rkq  = rkq 
+        self.Llkq = Llkq
+        self.rkd  = rkd 
+        self.Llkd = Llkd
+        self.rfd  = rfd 
+        self.Llfd = Llfd
+        self.vfdb = vfdb
+
+        # turbine/governor params:
+
+        self.Kp = Kp
+        self.Ki = Ki
+        self.J  = J 
+
+        # intial conditions:
+
+        self.fq0  = fq0
+        self.fkq0 = fkq0
+        self.fd0  = fd0
+        self.fkd0 = fkd0
+        self.ffd0 = ffd0
+        self.wr0 = wr0 
+        self.th0  = th0  
+        
+        dmax = 1e8
+
+        # call super:
+
+        Device.__init__(self, name)
+
+        # derived:
+
+        dend = Llkd*Lls*Lmd+Llfd*Lls*Lmd+Llfd*Llkd*Lmd+Llfd*Llkd*Lls
+        denq = (Lls*Lmq+Llkq*Lmq+Llkq*Lls)
+
+        self.sdd = (Llkd*Lmd+Llfd*Lmd+Llfd*Llkd)/dend
+        self.sdk = -Llfd*Lmd/dend
+        self.sdf = -Llkd*Lmd/dend
+        
+        self.skd = -Llfd*Lmd/dend
+        self.skkd = (Lls*Lmd+Llfd*Lmd+Llfd*Lls)/dend
+        self.skf = -Lls*Lmd/dend
+        
+        self.sfd = -Llkd*Lmd/dend
+        self.sfk = -Lls*Lmd/dend
+        self.sff = (Lls*Lmd+Llkd*Lmd+Llkd*Lls)/dend
+        
+        self.sqq = (Lmq+Llkq)/denq
+        self.sqk = -Lmq/denq
+
+        self.skq = -Lmq/denq
+        self.skkq = (Lmq+Lls)/denq
+        
+        self.Lq = Lls+(Lmq*Llkq)/(Llkq+Lmq)
+        self.Ld = (Lls+(Lmd*Llfd*Llkd)/(Lmd*Llfd+Lmd*Llkd+Llfd*Llkd))
+
+        # port atoms:
+
+        self.ids = SourceAtom("ids", x0=ids0, derfunc=self.id, units="A", dq=dq_current, dmax=dmax)
+        self.iqs = SourceAtom("iqs", x0=iqs0, derfunc=self.iq, units="A", dq=dq_current, dmax=dmax)
+       
+        # state atoms:
+
+        self.fq = StateAtom("fq", x0=fq0, derfunc=self.dfq, units="Wb", dq=dq_flux, dmax=dmax)
+        self.fd = StateAtom("fd", x0=fd0, derfunc=self.dfd, units="Wb", dq=dq_flux, dmax=dmax)
+        self.fkq = StateAtom("fkq", x0=fkq0, derfunc=self.dfkq, units="Wb", dq=dq_flux, dmax=dmax)
+        self.fkd = StateAtom("fkd", x0=fkd0, derfunc=self.dfkd, units="Wb", dq=dq_flux, dmax=dmax)
+        self.ffd = StateAtom("ffd", x0=ffd0, derfunc=self.dffd, units="Wb", dq=dq_flux, dmax=dmax)
+        self.wr = StateAtom("wr", x0=wr0, derfunc=self.dwr, units="rad/s", dq=dq_wr, dmax=dmax)
+        self.th = StateAtom("th", x0=th0, derfunc=self.dth, units="rad", dq=dq_th, dmax=dmax)
+
+        self.add_atoms(self.ids, self.iqs, self.fkq, self.fkd, self.ffd,
+                       self.wr, self.th)
+
+        # iqs relies on ext_q, wr, ids, fkq
+        # ids relies on ext_d, wr, iqs, fkd  
+        # fkq relies on iqs
+        # fkd relies on ffd, ids
+        # ffd relies on fkd, ids
+        # wr relies on fkq, fkd, ffd, wr, iqs, ids
+        # th relies on wr
+
+        self.iqs.add_connection(self.wr)
+        self.iqs.add_connection(self.ids)
+        self.iqs.add_connection(self.fkq)
+
+        self.ids.add_connection(self.wr)
+        self.ids.add_connection(self.iqs)
+        self.ids.add_connection(self.fkd)
+
+        self.fkq.add_connection(self.iqs)
+
+        self.fkd.add_connection(self.ffd)
+        self.fkd.add_connection(self.ids)
+
+        self.ffd.add_connection(self.fkd)
+        self.ffd.add_connection(self.ids)
+
+        self.wr.add_connection(self.ids)
+        self.wr.add_connection(self.iqs)
+        self.wr.add_connection(self.fkq)
+        self.wr.add_connection(self.fkd)
+        self.wr.add_connection(self.ffd)
+        self.wr.add_connection(self.th)
+
+        self.th.add_connection(self.wr)
+
+        # for terminal connection:
+
+        self.otherd = None
+        self.otherq = None
+
+        self.atomd = self.ids
+        self.atomq = self.iqs
+
+    def connect(self, device):
+
+        self.otherd = self.atomd.add_connection(device.atomd, 1.0)
+        self.otherq = self.atomq.add_connection(device.atomq, -1.0)
+
+    def vds(self):
+        return self.otherd.value()
+        
+    def vqs(self):
+        return self.otherq.value()
+
+    def vfd(self):
+        return self.vfdb
+
+    def iq(self, fq, fkq):
+        return self.sqq * fq + self.sqk * fkq
+
+    def id(self, fd, fkd, ffd):
+        return self.sdd * fd + self.sdk * fkd + self.sdf * ffd
+
+    def ikd(self, fd, fkd, ffd):
+        return self.skd * fd + self.skkd * fkd + self.skf * ffd
+
+    def ifd(self, fd, fkd, ffd):
+        return self.sfd * fd + self.sfk * fkd + self.sff * ffd
+
+    def ikq(self, fq, fkq):
+        return self.skq * fq + self.skkq * fkq
+
+    def fq(self, fkq):
+        return self.Lmq / (self.Lmq + self.Llkq) * fkq
+
+    def fd(self, fkd, ffd):
+        return (self.Lmd * (fkd / self.Llkd + ffd / self.Llfd) /
+                (1.0 + self.Lmd / self.Llfd + self.Lmd / self.Llkd))
+
+    def Te(self, fq, fd, fkq, fkd, ffd):
+        return (3.0 * self.P / 4.0
+                * ((self.Ld * self.id(fd, fkd, ffd)
+                + self.fd(fkd, ffd)) * self.iq(fq, fkq)
+                - (self.Lq * self.iq(fq, fkq)
+                + self.fq(fkq)) * self.id(fd, fkd, ffd)))
+
+    def Tm(self, wr, th):
+        return -(self.Kp * (self.ws - wr) + self.Ki * th)
+
+    @staticmethod
+    def dfd(self, fd):    # fd relies on fkd, ffd, fq
+        return (self.vds() - self.id(fd, self.fkd.q, self.ffd.q) * self.rs
+                + self.wr.q * self.fq.q)
+    
+    @staticmethod
+    def dfq(self, fq):    # fq relies on fkq, fd
+        return (self.vqs() - self.iq(fq, self.fkq.q) * self.rs
+                - self.wr.q * self.fd.q)
+
+    @staticmethod
+    def dffd(self, ffd):  # fkq relies on fq
+        return self.vfd() - self.ifd(self.fd.q, self.fkd.q, ffd) * self.rfd
+
+    @staticmethod
+    def dfkd(self, fkd):  # fkd relies on fd, ffd 
+        return -self.ikd(self.fd.q, fkd, self.ffd.q) * self.rkd
+
+    @staticmethod
+    def dfkq(self, fkq):  # fkq relies on fq
+        return -self.ikq(self.fq.q, fkq) * self.rkq
+
+    @staticmethod
+    def dwr(self, wr):    # wr relies on fq, fq, fkq, fkd, ffd
+        return ((1.0 / self.J)
+                * (self.Te(self.fq.q, self.fd.q, self.fkq.q, self.fkd.q, self.ffd.q)
+                   - self.Tm(wr, self.th.q)))
+
+    @staticmethod
+    def dth(self, th): # th relies on wr
+        return self.ws - self.wr.q
+
+
+class SyncMachineDQ4(Device):
+
+    """Synchronous Machine Reduced DQ Model as Voltage source behind a
+    Lim Latency Branch.
+
+    """
+
+    def __init__(self, name, Psm=25.0e6, VLL=4160.0, ws=60.0*pi,
+                 P=4.00, pf=0.80, rs=3.00e-3, Lls=0.20e-3, Lmq=2.00e-3,
+                 Lmd=2.00e-3, rkq=5.00e-3, Llkq=0.04e-3, rkd=5.00e-3,
+                 Llkd=0.04e-3, rfd=20.0e-3, Llfd=0.15e-3, vfdb=90.1, Kp=10.0e4,
+                 Ki=10.0e4, J=4221.7, fkq0=0.0, fkd0=0.0, ffd0=0.0, wr0=60.0*pi,
+                 th0=0.0, iqs0=0.0, ids0=0.0, dq_i=1e-2, dq_f=1e-2, dq_wr=1e-1,
+                 dq_th=1e-3, dq_v=1e0):
+
+        self.name = name
+
+        # sm params:
+
+        self.Psm  = Psm  
+        self.VLL  = VLL  
+        self.ws   = ws  
+        self.P    = P    
+        self.pf   = pf  
+        self.rs   = rs  
+        self.Lls  = Lls 
+        self.Lmq  = Lmq 
+        self.Lmd  = Lmd 
+        self.rkq  = rkq 
+        self.Llkq = Llkq
+        self.rkd  = rkd 
+        self.Llkd = Llkd
+        self.rfd  = rfd 
+        self.Llfd = Llfd
+        self.vfdb = vfdb
+
+        # turbine/governor params:
+
+        self.Kp = Kp
+        self.Ki = Ki
+        self.J  = J 
+
+        # intial conditions:
+
+        self.iqs0 = iqs0 
+        self.ids0 = ids0 
+        self.fkq0 = fkq0 
+        self.fkd0 = fkd0 
+        self.ffd0 = ffd0 
+        self.wr0 = wr0 
+        self.th0  = th0  
+        
+        dmax = 1e8
+
+        # call super:
+
+        Device.__init__(self, name)
+
+        # derived:
+
+        self.Lq = Lls + (Lmq * Llkq) / (Llkq + Lmq)
+        self.Ld = (Lls + (Lmd * Llfd * Llkd) / (Lmd * Llfd + Lmd * Llkd + Llfd * Llkd))
+
+        # state atoms:
+
+        self.ids = StateAtom("ids", x0=ids0, derfunc=self.dids, units="A",     dq=dq_i)
+        self.iqs = StateAtom("iqs", x0=iqs0, derfunc=self.diqs, units="A",     dq=dq_i)
+        self.fkq = StateAtom("fkq", x0=fkq0, derfunc=self.dfkq, units="Wb",    dq=dq_f)
+        self.fkd = StateAtom("fkd", x0=fkd0, derfunc=self.dfkd, units="Wb",    dq=dq_f)
+        self.ffd = StateAtom("ffd", x0=ffd0, derfunc=self.dffd, units="Wb",    dq=dq_f)
+        self.wr  = StateAtom("wr",  x0=wr0,  derfunc=self.dwr,  units="rad/s", dq=dq_wr)
+        self.th  = StateAtom("th",  x0=th0,  derfunc=self.dth,  units="rad",   dq=dq_th)
+
+        self.add_atoms(self.ids, self.iqs, self.fkq, self.fkd, self.ffd, self.wr, self.th)
+
+        # atom connections:
+
+        self.ids.add_connection(self.iqs)
+        self.ids.add_connection(self.wr)
+        self.ids.add_connection(self.fkq)
+
+        self.iqs.add_connection(self.ids)
+        self.iqs.add_connection(self.wr)
+        self.iqs.add_connection(self.fkd)
+        self.iqs.add_connection(self.ffd)
+
+        self.fkd.add_connection(self.ffd)
+        self.fkd.add_connection(self.ids)
+
+        self.fkq.add_connection(self.iqs)
+
+        self.ffd.add_connection(self.ids)
+        self.ffd.add_connection(self.fkd)
+
+        self.wr.add_connection(self.ids)
+        self.wr.add_connection(self.iqs)
+        self.wr.add_connection(self.fkq)
+        self.wr.add_connection(self.fkd)
+        self.wr.add_connection(self.ffd)
+        self.wr.add_connection(self.th)
+
+        self.th.add_connection(self.wr)
+
+        # ports:
+
+        self.atomd = self.ids
+        self.atomq = self.iqs
+
+        self.termd = None  # terminal voltage d connection
+        self.termq = None  # terminal voltage q connection
+
+        self.input = None  # avr
+
+    def connect(self, bus, avr=None):
+
+        self.termd = self.ids.add_connection(bus.atomd)
+        self.termq = self.iqs.add_connection(bus.atomq)
+
+        if avr:
+            self.input = self.ffd.add_connection(avr.vfd, self.vfdb)
+            avr.connectiond = avr.x1.add_connection(bus.vd, 1.0 / self.VLL)
+            avr.connectionq = avr.x1.add_connection(bus.vq, 1.0 / self.VLL)
+
+    def vtermd(self):
+        return self.termd.value()
+        
+    def vtermq(self):
+        return self.termq.value()
+
+    def vfd(self):
+        if self.input:
+            return self.input.value()
+        else:
+           return self.vfdb # no feedback control
+
+    def fq(self, fkq):
+        return self.Lmq / (self.Lmq + self.Llkq) * fkq
+
+    def fd(self, fkd, ffd):
+        return (self.Lmd * (fkd / self.Llkd + ffd / self.Llfd) /
+                (1.0 + self.Lmd / self.Llfd + self.Lmd / self.Llkd))
+
+    def fqs(self, fkq, iqs):
+        return self.Lq * iqs + self.fq(fkq)
+
+    def fds(self, fkd, ffd, ids):
+        return self.Ld * ids + self.fd(fkd, ffd)
+
+    def Te(self, fkq, fkd, ffd, iqs, ids):
+        return (3.0 * self.P / 4.0 * (self.fds(fkd, ffd, ids) * iqs
+                                      - self.fqs(fkq, iqs) * ids))
+
+    def Tm(self, wr, th):
+        return -(self.Kp * (self.ws - wr) + self.Ki * th)
+
+    def vds(self, ids, iqs, wr, fkq):
+        return -wr * self.Lq * iqs + wr * self.fq(fkq)
+
+
+    def vqs(self, ids, iqs, wr, fkd, ffd):
+        return wr * self.Ld * ids + wr * self.fd(fkd, ffd)
+
+    @staticmethod
+    def dids(self, ids):
+        return ((self.vds(ids, self.iqs.q, self.wr.q, self.fkq.q)
+                - self.vtermd() - self.rs * ids) / self.Lls)
+
+    @staticmethod
+    def diqs(self, iqs):
+        return ((self.vqs(self.ids.q, iqs, self.wr.q, self.fkd.q, self.ffd.q)
+                - self.vtermq() - self.rs * iqs) / self.Lls)
+                             
+    @staticmethod      
+    def dfkq(self, fkq):  # fkq relies on iqs
+        return (-self.rkq / self.Llkq * (fkq - self.Lq * self.iqs.q -
+                self.fq(fkq) + self.Lls * self.iqs.q))
+
+    @staticmethod
+    def dfkd(self, fkd):  # fkd relies on ffd, ids
+        return (-self.rkd / self.Llkd * (fkd - self.Ld * self.ids.q + 
+                self.fd(fkd, self.ffd.q) - self.Lls * self.ids.q))
+
+    @staticmethod
+    def dffd(self, ffd):  # ffd relies on fkd, ids
+        return (self.vfd() - self.rfd / self.Llfd * (ffd - self.Ld *
+                self.ids.q + self.fd(self.fkd.q, ffd) - self.Lls *
+                self.ids.q))
+
+    @staticmethod
+    def dwr(self, wr):  # wr relies on fkq, fkd, ffd, wr, ids, iqs
+        return (self.Te(self.fkq.q, self.fkd.q, self.ffd.q, self.iqs.q, self.ids.q)
+                - self.Tm(wr, self.th.q)) / self.J
+
+    @staticmethod
+    def dth(self, th): # th relies on wr
+        return self.ws - self.wr.q
+
+
+class AC8B(Device):
+
+    """IEEE AC8B Exciter (simplified)
+                    
+                .--------.                                               
+    vref     .->|  Kpr   |----.                Vrmax                    
+      |      |  '--------'    |                ,---               (vfd)   
+    + v      |              + v       .-------'-.               .------.   
+     ,-.  e1 |  .--------. + ,-.  pid |   Ka    |    + ,-.  e2  |  1   |   
+    ( S )----+->| Kir/s  |->( S )---->| ------- |---->( S )---->| ---- |---+--> vfd
+     `-'     |  '--------'   `-'      | 1+s*Ta  |  vr  `-'      | s*Te |   |
+    - ^      |  .--------.  + ^       '-,-------'     - ^       '------'   |
+      |      |  | s*Kdr  |    |     ---'  (x3)          | vse              |
+     vt      '->| ------ |----'    Vrmin               ,'.    .--------.   | 
+                | 1+s*Tr |                            ( S )<--| Se(Ve) |<--+
+                '--------'                             `-' +  '--------'   |
+                                                      + ^      .----.      |
+                 (x1, x2)                               '------| Ke |<-----'
+                                                               '----'     
+    """
+
+    def __init__(self, name, vref=1.0, Kpr=200.0, Kir=0.8,
+                 Kdr=1e-3, Tdr=1e-3, Ka=1.0, Ta=1e-4, Vrmin=0.0, Vrmax=5.0,
+                 Te=1.0, Ke=1.0, Sea=1.0119, Seb=0.0875, x10=0.0, x20=0.0,
+                 x30=0.0, vfd0=None, dq=1e-3):
+
+        Device.__init__(self, name)
+
+        self.vref = vref
+        self.Kpr = Kpr
+        self.Kir = Kir
+        self.Kdr = Kdr
+        self.Tdr = Tdr
+        self.Ka = Ka
+        self.Ta = Ta
+        self.Vrmin = Vrmin
+        self.Vrmax = Vrmax
+        self.Te = Te
+        self.Ke = Ke
+        self.Sea = Sea
+        self.Seb = Seb
+
+        self.x10 = x10
+        self.x20 = x20
+        self.x30 = x30
+
+        if not vfd0:
+            vfd0 = self.vref
+
+        self.vfd0 = vfd0
+
+        self.dq = dq
+
+        self.x1 = StateAtom("x1", x0=x10, derfunc=self.dx1, dq=dq*0.01)
+        self.x2 = StateAtom("x2", x0=x20, derfunc=self.dx2, dq=dq*0.001)
+        self.x3 = StateAtom("x3", x0=x30, derfunc=self.dx3, dq=dq*0.01)
+        self.vfd = StateAtom("vfd", x0=vfd0, derfunc=self.dvfd, dq=dq)
+
+        self.add_atoms(self.x1, self.x2, self.x3, self.vfd)
+
+        self.x2.add_connection(self.x1)
+        self.x3.add_connection(self.x1)
+        self.x3.add_connection(self.x2)
+        self.vfd.add_connection(self.x3)
+
+        self.connectiond = Connection()
+        self.connectionq = Connection()
+
+    def vt(self):
+        return sqrt(self.connectiond.value()**2
+                  + self.connectionq.value()**2)
+
+    def se(self, ve):
+        return 0.0  # todo: staturation
+
+    def e1(self):
+        return self.vref - self.vt()  
+       
+    def pid(self, x1, x2):
+        return ((self.Kir * self.Tdr - self.Kdr / self.Tdr) * x1
+                + self.Kir * x2 + (self.Kdr + self.Kpr * self.Tdr)
+                * self.e1())
+
+    def vr(self, x3):
+        return self.Ka / self.Ta * x3
+
+    def e2(self, x3, vfd):
+        return self.vr(x3) - self.vse(vfd)
+
+    def vse(self, vfd):
+        return vfd * self.Ke + self.se(vfd)
+
+    @staticmethod
+    def dx1(self, x1):  # x1 depends on: vt
+        return -1.0 / self.Tdr * x1 + self.e1()
+
+    @staticmethod
+    def dx2(self, x2):  # x2 depends on: x1
+        return self.x1.q
+
+    @staticmethod
+    def dx3(self, x3):  # x3 depends on: x1, x2
+        return -1.0 / self.Ta + self.pid(self.x1.q, self.x2.q)
+
+    @staticmethod
+    def dvfd(self, vfd):  # ve depends on: vt
+        return self.e2(self.x3.q, vfd) / self.Te
+
+  
 # =============================== Tests ========================================
 
 
@@ -2132,23 +2772,32 @@ def test1():
 
 def test2():
 
-    sys = System(dq=1e-3)
+    dq=1e-3
+
+    sys = System()
 
     ground = GroundNode("ground")
-    node1 = LimNode("node1", 1.0, 1.0, 0.0)
-    node2 = LimNode("node2", 1.0, 1.0, 0.0)
-    node3 = LimNode("node3", 1.0, 1.0, 0.0)
+    node1 = LimNode("node1", 1.0, 0.1, 0.0, dq=dq)
+    node2 = LimNode("node2", 1.0, 0.1, 0.0, dq=dq)
+    node3 = LimNode("node3", 1.0, 0.1, 0.0, dq=dq)
+    node4 = LimNode("node4", 1.0, 0.1, 0.0, dq=dq)
+    node5 = LimNode("node5", 1.0, 0.1, 0.0, dq=dq)
 
-    branch1 = LimBranch("branch1", 1.0, 0.1, 10.0)
-    branch2 = LimBranch("branch2", 1.0, 0.1, 0.0)
-    branch3 = LimBranch("branch2", 1.0, 0.1, 0.0)
+    branch1 = LimBranch("branch1", 1.0, 0.1, 1.0, dq=dq)
+    branch2 = LimBranch("branch2", 1.0, 0.1, 0.0, dq=dq)
+    branch3 = LimBranch("branch3", 1.0, 0.1, 0.0, dq=dq)
+    branch4 = LimBranch("branch4", 1.0, 0.1, 0.0, dq=dq)
+    branch5 = LimBranch("branch5", 1.0, 0.1, 0.0, dq=dq)
 
-    sys.add_devices(ground, node1, branch1, node2, node3, branch2, branch3)
+    sys.add_devices(ground, node1, node2, node3, node4, node5,
+                    branch1, branch2, branch3, branch4, branch5)
 
     # inode, jnode
     branch1.connect(ground, node1)
     branch2.connect(node1, node2)
     branch3.connect(node2, node3)
+    branch4.connect(node3, node4)
+    branch5.connect(node4, node5)
 
     node1.connect(branch1, terminal="j")
     node1.connect(branch2, terminal="i")
@@ -2157,39 +2806,46 @@ def test2():
     node2.connect(branch3, terminal="i")
 
     node3.connect(branch3, terminal="j")
+    node3.connect(branch4, terminal="i")
 
-    if 1: # nl test:
+    node4.connect(branch4, terminal="j")
+    node4.connect(branch5, terminal="i")
 
-        def aii_nl(self):
-            return -(self.r) / self.l - self.state.q
+    node5.connect(branch5, terminal="j")
 
-        branch1.state.coeffunc = aii_nl
-
-    tstop = 20.0
+    tstop = 200.0
     dc = True
 
-    #sys.init_ss(dt=1.0e-3, dc=dc)
-    sys.init_ode(dt=1.0e-3, dc=dc)
-    sys.init_qss(dc=dc)
+    qss_args = {
+        "verbose":True,
+        "chk_ss_period":100.0,
+        "chk_ss_ndq":100,
+        "chk_ss_dmax":50
+        }
 
-    #sys.run_ss(2.0)
-    sys.run_ode(2.0)
-    sys.run_qss(2.0)
+    sys.initialize(dt=1.0e-3, dc=dc)
+
+    sys.run_ode(tstop*0.1, reset_after=True)
+    sys.run_qss(tstop*0.1, reset_after=False, **qss_args)
 
     node2.g = 1000.0
     
-    #sys.run_ss(2.1)
-    sys.run_ode(2.1)
-    sys.run_qss(2.1)
+    sys.run_ode(tstop*0.1+0.1, reset_after=True)
+    sys.run_qss(tstop*0.1+0.1, reset_after=False, **qss_args)
     
     node2.g = 1.0
     
-    #sys.run_ss(tstop)
-    sys.run_ode(tstop)
-    sys.run_qss(tstop)
+    sys.run_ode(tstop*0.5, reset_after=True)
+    sys.run_qss(tstop*0.5, reset_after=False, **qss_args)
 
-    sys.plot_groups((node1.atom, node2.atom, node3.atom), plot_ode=True)
-    sys.plot_groups((branch1.atom, branch2.atom, branch3.atom), plot_ode=True)
+    branch1.source.u0 = 1.2
+
+    sys.run_ode(tstop, reset_after=True)
+    sys.run_qss(tstop, reset_after=False, **qss_args)
+
+    sys.plot_groups((node1.v, node2.v, node3.v, node4.v, node5.v),
+                    (branch1.i, branch2.i, branch3.i, branch4.i, branch5.i),
+                    plot_ode=True, plot_qss=True)
 
 
 def test3():
@@ -2237,8 +2893,8 @@ def test4():
 
     sys = System(dq=1e-3)
 
-    sm = SyncMachineDQ("sm", vfdb=3e4, dq_v=1e-1, dq_th=1e-4, dq_wr=1e-4, dq_flux=1e-4)
-    load = LimBranchDQ("load", l=3.6e-3, r=2.8, w=ws, dq=1e-1)
+    sm = SyncMachineDQ("sm", vfdb=3e4, dq_v=1e0, dq_th=1e-3, dq_wr=1e-3, dq_flux=1e-3)
+    load = LimBranchDQ("load", l=3.6e-3, r=2.8, w=ws, dq=1e0)
     gnd = GroundNodeDQ("gnd")   
 
     sys.add_devices(sm, load, gnd)
@@ -2246,14 +2902,14 @@ def test4():
     sm.connect(load, terminal="i")
     load.connect(sm, gnd)
 
-    tstop = 10.0
+    tstop = 6.0
     dt = None
     dc = True
     ode = True 
     qss = True
     upds = True
 
-    chk_ss = True
+    chk_ss = False
     ndq = 100
 
     sys.initialize(dt=1.0e-3, dc=dc)
@@ -2266,16 +2922,10 @@ def test4():
     if ode: sys.run_ode(tstop, reset_after=True)
     if qss: sys.run_qss(tstop, reset_after=False, chk_ss_period=chk_ss, chk_ss_ndq=ndq)
 
-    if 1:
-        sys.plot(sm.atomd, sm.atomq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        sys.plot(sm.wr, sm.th, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        sys.plot(sm.fkq, sm.fkd, sm.ffd, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        sys.plot(load.atomd, load.atomq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-
-    if 0:
-        with open(r"c:\temp\initcond.txt", "w") as f:
-            for atom in sys.atoms:
-                f.write("    {}0 = {}\n".format(atom.name, atom.x))
+    sys.plot(sm.atomd, sm.atomq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+    sys.plot(sm.wr, sm.th, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+    sys.plot(sm.fkq, sm.fkd, sm.ffd, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+    sys.plot(load.atomd, load.atomq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
 
 
 def test5():
@@ -2290,16 +2940,16 @@ def test5():
                        dq_wr=1e-3,
                        dq_flux=1e-3)
 
-    bus = LimNodeDQ("bus", c=0.001, w=ws, dq=1e0)
-    load = LimBranchDQ("load", l=3.6e-3, r=2.8, w=ws, dq=1e0)
-    gnd = GroundNodeDQ("gnd")  
+    bus = LimNodeDQ("bus", c=0.001, g=1.0/2.8, w=ws, dq=1e0)
+    #load = LimBranchDQ("load", l=3.6e-3, r=2.8, w=ws, dq=1e0)
+    #gnd = GroundNodeDQ("gnd")  
 
-    sys.add_devices(sm, bus, load, gnd)
+    sys.add_devices(sm, bus)#, load, gnd)
 
     sm.connect(bus)
     bus.connect(sm, terminal="j")
-    bus.connect(load, terminal="i")
-    load.connect(bus, gnd)
+    #bus.connect(load, terminal="i")
+    #load.connect(bus, gnd)
 
     tstop = 20.0
     dt = None
@@ -2311,36 +2961,105 @@ def test5():
     chk_ss = False
     ndq = 100
 
-    if qss: sys.init_qss(dc=dc)
-    if ode: sys.init_ode(dt=1.0e-3, dc=dc)
+    sys.initialize(dt=1.0e-3, dc=dc)
 
-    print(sys.x)
-    print(sys.u)
+    #print(sys.x)
+    #print(sys.u)
 
-    if qss: sys.run_qss(tstop*0.2, reset_after=False)
+    #if qss: sys.run_qss(tstop*0.2, reset_after=True)
     if ode: sys.run_ode(tstop*0.2, reset_after=False)
 
-    print(sys.x)
-    print(sys.u)
+    #print(sys.x)
+    #print(sys.u)
     
-    #load.r = load.r*0.5
+    bus.g = bus.g*1.2
     
-    if qss: sys.run_qss(tstop*0.2001, reset_after=True, chk_ss_period=chk_ss, chk_ss_ndq=ndq)
-    if ode: sys.run_ode(tstop*0.2001, reset_after=False)
+    #if qss: sys.run_qss(tstop*0.21, reset_after=True, chk_ss_period=chk_ss, chk_ss_ndq=ndq)
+    if ode: sys.run_ode(tstop*0.21, reset_after=False)
     
-    if 1:
-        sys.plot(bus.vd, bus.vq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        sys.plot(sm.wr, sm.th, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        sys.plot(sm.fkq, sm.fkd, sm.ffd, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        sys.plot(load.atomd, sm.ids, load.atomq, sm.iqs, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
-        
+    sys.plot(bus.vd, bus.vq, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+    sys.plot(sm.wr, sm.th, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+    sys.plot(sm.fkq, sm.fkd, sm.ffd, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+    sys.plot(load.atomd, sm.ids, load.atomq, sm.iqs, plot_ode=ode, plot_qss=qss, plot_qss_updates=upds)
+
+
+def test6():
+
+    ws = 60*pi    # system radian frequency
+    vfdb = 90.1   # sm rated field voltage
+    VLL = 4160.0  # bus voltage
+    vref = 1.0    # pu voltage setpoint
+
+    dq_i = 1e-1
+    dq_v = 1e-1
+
+    sys = System(dq=1e-3)
+
+    sm = SyncMachineDQ4("sm", vfdb=vfdb, VLL=VLL,
+                        dq_i=dq_i, dq_v=dq_v, dq_th=1e-4, dq_wr=1e-4, dq_f=1e-3)
+
+    
+    bus = LimNodeDQ("bus", c=0.001, g=0.01, w=ws, vd0=0.0, vq0=4160, dq=dq_v)
+
+    avr = AC8B("avr", vref=vref, dq=1e-4)
+
+    load = LimBranchDQ("load", l=3.6e-3, r=2.8, w=ws, iq0=1000, dq=dq_i)
+
+    gnd = GroundNodeDQ("gnd")
+
+    sys.add_devices(sm, bus, load, gnd, avr)
+
+    sm.connect(bus, avr)
+
+    bus.connect(sm, terminal="j")
+    bus.connect(load, terminal="i")
+
+    load.connect(bus, gnd)
+
+    tstop = 60.0
+
+    dt = 1.0e-3
+    dc = True
+
+    ode = True 
+    qss = True
+    upds = False
+    upd_bins = 200
+
+    chk_ss = True
+    chk_ndq = 10
+    chk_dmax = 10
+
+    plotargs = {
+    "plot_ode":ode,
+    "plot_qss":qss,
+    "plot_qss_updates":upds,
+    "upd_bins":upd_bins
+    }
+
+    def event(sys):
+        load.r *= 0.5
+
+    sys.schedule(event, tstop*0.2)
+
+    sys.initialize(dt=dt, dc=dc)
+
+    sys.run(tstop, ode=ode, qss=qss)
+
+    sys.plot(avr.x1, avr.x2, avr.x3, avr.vfd, **plotargs)
+    sys.plot(bus.vd, bus.vq, **plotargs)
+    sys.plot(sm.wr, sm.th, **plotargs)
+    sys.plot(sm.fkq, sm.fkd, sm.ffd, **plotargs)
+    sys.plot(load.id, load.iq, **plotargs)
+     
 
 if __name__ == "__main__":
 
     #test1()
     #test2()
     #test3()
-    test4()
+    #test4()
     #test5()
+    test6()
 
      
