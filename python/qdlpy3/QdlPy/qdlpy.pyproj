@@ -41,6 +41,9 @@
     <Compile Include="lti.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="scratch.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="tests.py">
       <SubType>Code</SubType>
     </Compile>
