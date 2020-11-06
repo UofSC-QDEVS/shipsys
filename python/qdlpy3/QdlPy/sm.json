@@ -1,0 +1,227 @@
+{
+    "name": "Synchronous Machine",
+    "parameters": {
+        [
+            {
+                "name": "VLL",
+                "desc": "",
+                "units":  "",
+                "default": 4160.0
+            },
+            {
+                "name": "VLL",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "ws",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "P",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "rs",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Lls",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Lmq",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Lmd",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "rkq",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Llkq",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "rkd",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Llkd",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "rfd",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Llfd",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "vfdb",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Kp",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Kp",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "Ki",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "J",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            },
+            {
+                "name": "vfd",
+                "desc": "",
+                "units": "",
+                "default": 4160.0
+            }
+        ],
+        "states": [
+            {
+                "name": "fkq",
+                "desc": "",
+                "units": "",
+                "derivative": "dfkq_dt",
+            },
+            {
+                "name": "fkd",
+                "desc": "",
+                "units": "",
+                "derivative": "dfkd_dt"
+            },
+            {
+                "name": "ffd",
+                "desc": "",
+                "units": "",
+                "derivative": "dffd_dt"
+            },
+
+            {
+                "name": "wr",
+                "desc": "",
+                "units": "",
+                "derivative": "dwr_dt"
+            },
+            {
+                "name": "th",
+                "desc": "",
+                "units": "",
+                "derivative": "dth_dt"
+            },
+            {
+                "name": "iqs",
+                "desc": "",
+                "units": "",
+                "derivative": "diqs_dt"
+            },
+            {
+                "name": "ids",
+                "desc": "",
+                "units": "",
+                "derivative": "dids_dt"
+            }
+        ],
+        "ports": [
+            {
+                "name": "terminal",
+                "type": "dq",
+                "input": [ "vds", "vqs" ],
+                "output":  ["ids", "iqs"]
+            }
+        ],
+        "variables": [
+            {
+                "name": "Lq",
+                "desc": "",
+                "units": "",
+                "expr": "Lls + (Lmq * Llkq) / (Llkq + Lmq)\")"
+            },
+            {
+                "name": "Ld",
+                "desc": "",
+                "units": "",
+                "expr": "Lls + (Lmd * Llfd * Llkd) / (Lmd * Llfd + Lmd * Llkd + Llfd * Llkd)\")"
+            },
+            {
+                "name": "fq",
+                "desc": "",
+                "units": "",
+                "expr": "Lmq / (Lmq + Llkq) * fkq\")"
+            },
+            {
+                "name": "fd",
+                "desc": "",
+                "units": "",
+                "expr": "Lmd * (Lmd * (fkd / Llkd + ffd / Llfd)) / (1 + Lmd / Llfd + Lmd / Llkd)\")"
+            },
+            {
+                "name": "Te",
+                "desc": "",
+                "units": "",
+                "expr": "3/2 * P/2 * (fds * iqs - fqs * ids)\")"
+            },
+            {
+                "name": "Tm",
+                "desc": "",
+                "units": "",
+                "expr": "Kp * (ws - wr) + th * Ki\")"
+            }
+        ],
+        "diffeq": [
+            "diqs_dt * Lls + rs * iqs + wr * Ld + wr * fd - vqs",
+            "dids_dt * Lls + rs * ids - wr * Lq - wr * fq - vds",
+            "dfkq_dt * Llkq + rkq * (fkq - Lq * iqs - fq + Lls * iqs)",
+            "dfkd_dt * Llkd + rkd * (fkd - Ld * ids + fd + Lls * ids)",
+            "dffd_dt * Llfd + rfd * (ffd - Ld * ids + fd + Lls * ids) - vfd",
+            "dwr_dt * J + Tm - Te",
+            "dth_dt + wr - ws"
+        ]
+    }
+}
