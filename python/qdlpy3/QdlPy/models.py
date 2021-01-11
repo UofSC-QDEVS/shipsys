@@ -1996,7 +1996,5 @@ class Exciter(SymbolicDevice):
 
         self.add_diffeq("dx1_dt + 1/Tdr * x1 - vin")
         self.add_diffeq("dx2_dt - x1")
-
         self.add_diffeq("dx3_dt - ((-Kdr/(Tdr**2) + Kir)*x1 + Kir/Tdr * x2 - 1/Ta * x3 + (Kdr/Tdr + Kpr) * vin)")
-
         self.add_diffeq("dvfd_dt - (Ka/Ta * x3 - 1/Te * (vfd * Te / Ke))")

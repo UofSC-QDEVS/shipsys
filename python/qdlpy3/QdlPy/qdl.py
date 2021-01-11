@@ -1,7 +1,16 @@
 """Quantized DEVS-LIM modeling and simulation framework.
 """
 
-from math import pi, sin, cos, acos, tan, acos, atan2, sqrt, floor
+from math import pi    as PI   
+from math import sin   as SIN  
+from math import cos   as COS  
+from math import acos  as ACOS 
+from math import tan   as TAN  
+from math import acos  as ACOS 
+from math import atan2 as ATAN2
+from math import sqrt  as SQRT 
+from math import floor as FLOOR
+
 from collections import OrderedDict as odict
 from array import array
 
@@ -147,11 +156,14 @@ class Atom(object):
         # jacobian cell functions:
 
         self.jacfuncs = []
+        self.derargfunc = None
 
         # parent object references:
 
         self.sys = None
         self.device = None
+
+        # other:
 
         self.implicit = True
 
@@ -1895,10 +1907,10 @@ class Port(object):
 
     def connect(self, other):
 
-        if self.typ = "in":
+        if self.typ == "in":
             self.connections[0].from_connections.append(other.connections[0]) 
 
-        elif self.typ = "out":
+        elif self.typ == "out":
             other.connections[0].from_connections.append(self.connections[0]) 
 
         elif self.typ in ("inout"):
@@ -2032,7 +2044,7 @@ class SymbolicDevice(Device):
         self.electrical_ports[name]["output_port"] = self.output_ports[name]
 
         connection = PortConnection(input, sign=sign, expr=expr)
-        self.ports[name] = Port(name, typ="inout", connection)
+        self.ports[name] = Port(name, "inout", connection)
         setattr(self, name, self.ports[name])
 
     def add_dq_port(self, name, inputs, outputs, sign=1, exprs=None):
@@ -2065,7 +2077,7 @@ class SymbolicDevice(Device):
         connection_d = PortConnection(inputs[0], sign=sign, expr=expr_d)
         connection_q = PortConnection(inputs[1], sign=sign, expr=expr_q)
 
-        self.ports[name] = Port(name, typ="dq", connection_d, connection_q)
+        self.ports[name] = Port(name, "dq", connection_d, connection_q)
 
         setattr(self, name, self.ports[name])
 

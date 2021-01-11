@@ -1,6 +1,6 @@
 
 from qdl import *
-from models import *     
+from models import *  
 
 
 def test1():
@@ -24,7 +24,7 @@ def test1():
 
 def test2():
 
-    w = 2*pi*60
+    w = 2*PI*60
     sbase = 100e6
     vbase = 115e3
 
@@ -130,7 +130,7 @@ def test2():
 
 def test3():
 
-    ws = 2*60*pi 
+    ws = 2*60*PI 
     vfdb = 90.1  
     VLL = 4160.0 
     vref = 1.0   
@@ -217,7 +217,7 @@ def test3():
 
 def test4():
 
-    ws = 2*60*pi  # system radian frequency
+    ws = 2*60*PI  # system radian frequency
     vfdb = 90.1   # sm rated field voltage
     VLL = 4160.0  # bus nominal line-to-line rms voltage
     vref = 1.0    # pu voltage setpoint
@@ -286,7 +286,7 @@ def test5():
 
     sys = System(dq=1e-3)
 
-    pendulum = Pendulum("pendulum", r=0.4, l=8.0, theta0=pi/4, omega0=0.0,
+    pendulum = Pendulum("pendulum", r=0.4, l=8.0, theta0=PI/4, omega0=0.0,
                         dq_omega=2e-2, dq_theta=2e-2)
 
     sys.add_devices(pendulum)
@@ -305,7 +305,7 @@ def test5():
 
     def event(sys):
         pendulum.omega.set_state(0.0)
-        pendulum.theta.set_state(-pi/4, quantize=True)
+        pendulum.theta.set_state(-PI/4, quantize=True)
 
     #sys.schedule(event, tstop*0.1)
 
@@ -326,12 +326,12 @@ def test6():
 
     pendulums = CoupledPendulums("pendulums", k=1.0, r1=1.0, r2=1.0,
                                  l1=1.0, l2=1.0, m1=1.0, m2=1.0,
-                                 th10=pi/4, w10=0.0, th20=-pi/4, w20=0.0,
+                                 th10=PI/4, w10=0.0, th20=-PI/4, w20=0.0,
                                  dq_w=1e-1, dq_th=1e-1)
 
     sys.add_devices(pendulums)
 
-    tstop = 100.0
+    tstop = 0.01
     dt = 1.0e-3
     dc = 0
     optimize_dq = 1
@@ -344,7 +344,7 @@ def test6():
     sys.initialize(dt=dt, dc=dc)
 
     def event(sys):
-        pendulums.th1.set_state(pi/4)
+        pendulums.th1.set_state(PI/4)
 
     sys.schedule(event, tstop*0.1)
 
@@ -369,6 +369,6 @@ if __name__ == "__main__":
     #test1()
     #test2()
     #test3()
-    #test4()
+    test4()
     #test5()
-    test6()
+    #test6()

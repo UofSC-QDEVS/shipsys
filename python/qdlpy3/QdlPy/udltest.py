@@ -9,7 +9,7 @@ def test1():
     sys = System(dq=1e-3)
 
     pendulum = Pendulum2("pendulum", mu=0.5, l=10.0, a0=1.0, w0=1.0,
-                        dq_w=4e-2, dq_a=1e-2)
+                         dq_w=4e-2, dq_a=1e-2)
 
     sys.add_devices(pendulum)
 

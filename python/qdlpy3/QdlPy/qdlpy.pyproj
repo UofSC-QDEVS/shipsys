@@ -5,7 +5,7 @@
     <ProjectGuid>42ca2317-fdf6-423b-9001-e649d5872c5c</ProjectGuid>
     <ProjectHome>
     </ProjectHome>
-    <StartupFile>udltest.py</StartupFile>
+    <StartupFile>tests.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
