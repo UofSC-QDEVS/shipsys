@@ -1,25 +1,17 @@
 {
     "name": "Synchronous Machine",
     "parameters": [
-        {
-            "name": "VLL",
-            "desc": "Terminal line-to-line RMS voltage",
-            "units":  "V",
-            "default": 4160.0
+        [ "VLL", "V", 4160.0 ],
+        [ "ws", "rad/s", 188.9 ],
+        [ "P", "", 2 ],
+        [ "rs", "V", 4160.0 ],
+        [ "VLL", "V", 4160.0 ],
+        [ "VLL", "V", 4160.0 ],
+        [ "VLL", "V", 4160.0 ],
+        [ "VLL", "V", 4160.0 ],
+        [ "VLL", "V", 4160.0 ]
         },
-        {
-            "name": "ws",
-            "desc": "Electrical synchronous speed",
-            "units": "rad/s",
-            "default": 4160.0
-        },
-        {
-            "name": "P",
-            "desc": "Number of poles",
-            "units": "",
-            "default": 4160.0
-        },
-        {
+
             "name": "rs",
             "desc": "Stator resistance",
             "units": "Ohm",

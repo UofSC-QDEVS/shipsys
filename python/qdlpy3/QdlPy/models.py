@@ -1,3 +1,28 @@
+"""QDL Model Library
+
+Device architecture:
+
+  .------------------.                  .------------------.
+  |    Device        |                  |    Device        |
+  |                  |   input/output   |                  |
+  | .--------------. |                  | .--------------. |
+  | | Input Port   | |                  | | Output Port  | |
+  | |              | |    Connection    | |              | |
+  | | (Connector)<--------------------------(Connector)  | |
+  | '--------------' |                  | '--------------' |
+  |                  |                  |                  |
+  | .--------------. |                  | .--------------. |
+  | |  Inout Port  | |                  | |  Inout Port  | |
+  | |              | |    Connection1   | |              | |
+  | | (Connector1)<-------------------------(Connector1) | |
+  | | (Connector2)------------------------->(Connector2) | |
+  | '--------------' |    Connection2   | '--------------' |
+  |                  |                  |                  |
+  '------------------'                  '------------------'
+
+
+"""
+
 
 from qdl import *
 
@@ -11,10 +36,10 @@ class GroundNode(Device):
 
         Device.__init__(self, name)
 
-        self.atom = SourceAtom(name="source", source_type=SourceType.CONSTANT,
-                               u0=0.0, units="V", dq=1.0)
+        self.voltage = SourceAtom(name="voltage", source_type=SourceType.CONSTANT,
+                                  x0=0.0, units="V", dq=1.0)
 
-        self.add_atom(self.atom)
+        self.add_atom(self.voltage)
 
 
 class ConstantSourceNode(Device):
@@ -23,19 +48,31 @@ class ConstantSourceNode(Device):
 
         Device.__init__(self, name)
 
-        self.atom = SourceAtom(name="source", source_type=SourceType.CONSTANT,
-                               u0=v0, units="V", dq=1.0)
+        self.voltage = SourceAtom(name="voltage", source_type=SourceType.CONSTANT,
+                                  x0=v0, units="V", dq=1.0)
 
-        self.add_atom(self.atom)
+        self.add_atom(self.voltage)
+
+
+class PwmSourceNode(Device):
+
+    def __init__(self, name="source", vlo=0.0, vhi=1.0, freq=1e3, duty=0.5):
+
+        Device.__init__(self, name)
+
+        self.voltage = SourceAtom(name="voltage", source_type=SourceType.PWM, x0=vlo, x1=vhi,
+                                  x2=vlo, freq=freq, duty=duty, dq=1.0)
+
+        self.add_atom(self.voltage)
 
 
 class LimNode(Device):
 
     """Generic LIM Lantency Node with G, C, I, B and S components.
-                                
-                       \       
-               i_i2(t)  ^   ... 
-                         \   
+
+                       \
+               i_i2(t)  ^   ...
+                         \
                  i_i1(t)  \     i_ik(t)
                 ----<------o------>----
                            |
@@ -43,17 +80,17 @@ class LimNode(Device):
                            |   | i_i(t)
            .--------.------+------------.--------------.
            |        |      |    i_b =   |      i_s =   |       +
-          ,-.      <.     _|_   b_k *  ,^.     s_pq * ,^.     
+          ,-.      <.     _|_   b_k *  ,^.     s_pq * ,^.
     H(t) ( ^ )   G <.   C ___  v_k(t) < ^ >  i_pq(t) < ^ >   v(t)
-          `-'      <.      |           `.' ^          `.' ^   
+          `-'      <.      |           `.' ^          `.' ^
            |        |      |            |   \          |   \   -
            '--------'------+------------'----\---------'    \
                           _|_                 \              '---- port_s
-                           -                   '---- port_b   
+                           -                   '---- port_b
 
     isum = -(h + i_s + i_b) + v*G + v'*C
 
-    v'= 1/C * (isum + h + i_s + i_b - v*G) 
+    v'= 1/C * (isum + h + i_s + i_b - v*G)
 
     """
 
@@ -66,8 +103,8 @@ class LimNode(Device):
         self.c = c
         self.g = g
 
-        self.h = SourceAtom("h", source_type=source_type, u0=h0,
-                                 u1=h1, u2=h2, ua=ha, freq=freq, phi=phi,
+        self.h = SourceAtom("h", source_type=source_type, x0=h0,
+                                 x1=h1, x2=h2, xa=ha, freq=freq, phi=phi,
                                  duty=duty, t1=t1, t2=t2, dq=dq, units="A")
 
         self.voltage = StateAtom("voltage", x0=0.0, coeffunc=self.aii, dq=dq,
@@ -88,9 +125,9 @@ class LimNode(Device):
         elif terminal == "j":
             self.voltage.add_connection(branch.current, coeffunc=self.aji)
             self.voltage.add_jacfunc(branch.current, self.aji)
-        
+
     @staticmethod
-    def aii(self):
+    def aii(self, v=0):
         return -self.g / self.c
 
     @staticmethod
@@ -98,34 +135,34 @@ class LimNode(Device):
         return 1.0 / self.c
 
     @staticmethod
-    def aij(self):
+    def aij(self, v=0, i=0):
         return -1.0 / self.c
 
     @staticmethod
-    def aji(self):
+    def aji(self, i=0, v=0):
         return 1.0 / self.c
 
 
 class LimBranch(Device):
 
     """Generic LIM Lantency Branch with R, L, V, T and Z components.
-    
-                      +                v_ij(t)              -
-    
-                                       i(t) --> 
-    
+
+              +                       v_ij(t)                    -
+
+                                       i(t) -->
+
                                      v_t(t) =        v_z(t) =
                v(t)  +   -   +   -  T_ijk * v_k(t)  Z_ijpq * i_pq(t)
     positive   ,-.     R       L         ,^.           ,^.      negative
         o-----(- +)---VVV-----UUU-------<- +>---------<- +>-------o
-               `-'                       `.'           `.'  
+               `-'                       `.'           `.'
                                           ^             ^
                                           |             |
                                        port_t         port_z
-    
+
     vij = -(v + vt + vz) + i*R + i'*L
 
-    i'= 1/L * (vij + v + vt + vz - i*R) 
+    i'= 1/L * (vij + v + vt + vz - i*R)
 
     """
 
@@ -138,8 +175,8 @@ class LimBranch(Device):
         self.l = l
         self.r = r
 
-        self.e = SourceAtom("e", source_type=source_type, u0=e0,
-                                 u1=e1, u2=e2, ua=ea, freq=freq, phi=phi,
+        self.e = SourceAtom("e", source_type=source_type, x0=e0,
+                                 x1=e1, x2=e2, xa=ea, freq=freq, phi=phi,
                                  duty=duty, t1=t1, t2=t2, dq=dq, units="V")
 
         self.current = StateAtom("current", x0=0.0, coeffunc=self.aii, dq=dq,
@@ -158,9 +195,9 @@ class LimBranch(Device):
 
         self.current.add_jacfunc(inode.voltage, self.aij)
         self.current.add_jacfunc(jnode.voltage, self.aji)
-        
+
     @staticmethod
-    def aii(self):
+    def aii(self, i=0):
         return -self.r / self.l
 
     @staticmethod
@@ -168,11 +205,11 @@ class LimBranch(Device):
         return 1.0 / self.l
 
     @staticmethod
-    def aij(self):
+    def aij(self, i=0, v=0):
         return 1.0 / self.l
 
     @staticmethod
-    def aji(self):
+    def aji(self, v=0, i=0):
         return -1.0 / self.l
 
 
@@ -187,7 +224,7 @@ class GroundNodeDQ(Device):
             |         |
             '----+----'
                 _|_
-                 - 
+                 -
     """
 
 
@@ -196,10 +233,10 @@ class GroundNodeDQ(Device):
         Device.__init__(self, name)
 
         self.vd = SourceAtom(name="vd", source_type=SourceType.CONSTANT,
-                                u0=0.0, units="V", dq=1.0)
+                                x0=0.0, units="V", dq=1.0)
 
         self.vq = SourceAtom(name="vq", source_type=SourceType.CONSTANT,
-                                u0=0.0, units="V", dq=1.0)
+                                x0=0.0, units="V", dq=1.0)
 
         self.add_atoms(self.vd, self.vq)
 
@@ -209,14 +246,14 @@ class SourceNodeDQ(Device):
     """
           noded       nodeq
             o           o
-            |           |          
+            |           |
         +  ,-.      +  ,-.
        Vd (   )    Vq (   )
         -  `-'      -  `-'
             |           |
             '-----+-----'
                  _|_
-                  - 
+                  -
     """
 
 
@@ -230,10 +267,10 @@ class SourceNodeDQ(Device):
         self.vq0 = voltage * cos(th0)
 
         self.vd = SourceAtom(name="vd", source_type=SourceType.FUNCTION,
-                             srcfunc=self.get_vd, u0=self.vd0, units="V", dq=1.0)
+                             srcfunc=self.get_vd, x0=self.vd0, units="V", dq=1.0)
 
         self.vq = SourceAtom(name="vq", source_type=SourceType.FUNCTION,
-                             srcfunc=self.get_vq, u0=self.vq0, units="V", dq=1.0)
+                             srcfunc=self.get_vq, x0=self.vq0, units="V", dq=1.0)
 
         self.add_atoms(self.vd, self.vq)
 
@@ -264,13 +301,13 @@ class SourceNodeDQ(Device):
 
 
 class LimBranchDQ(Device):
-    
+
     """RLV Branch DQ Dynamic Phasor Model.
 
                  .-------------------------------------.
                  |  vd(t)    id*(r + w*L)      id'*L   |
                  |   ,-.    +            -    +     -  |
-     inodep  o---|--(- +)---------VVV-----------UUU----|---o  jnodep  
+     inodep  o---|--(- +)---------VVV-----------UUU----|---o  jnodep
                  |   `-'             id -->            |
                  |                                     |
                  |  vq(t)    iq*(r + w*L)      iq'*L   |
@@ -281,8 +318,8 @@ class LimBranchDQ(Device):
                  '-------------------------------------'
     """
 
-    def __init__(self, name, l, r=0.0, vd0=0.0, vq0=0.0, w=60.0*pi, id0=0.0,
-                 iq0=0.0, source_type=SourceType.CONSTANT, 
+    def __init__(self, name, l, r=0.0, vd0=0.0, vq0=0.0, w=60.0*PI, id0=0.0,
+                 iq0=0.0, source_type=SourceType.CONSTANT,
                  vd1=0.0, vd2=0.0, vda=0.0, freqd=0.0, phid=0.0, dutyd=0.0,
                  td1=0.0, td2=0.0, vq1=0.0, vq2=0.0, vqa=0.0,
                  freqq=0.0, phiq=0.0, dutyq=0.0, tq1=0.0, tq2=0.0, dq=1e0):
@@ -297,12 +334,12 @@ class LimBranchDQ(Device):
 
         dmax = 1e8
 
-        self.ed = SourceAtom("ed", source_type=source_type, u0=vd0, u1=vd1,
-                             u2=vd2, ua=vda, freq=freqd, phi=phid, dmax=dmax,
+        self.ed = SourceAtom("ed", source_type=source_type, x0=vd0, x1=vd1,
+                             x2=vd2, xa=vda, freq=freqd, phi=phid, dmax=dmax,
                              duty=dutyd, t1=td1, t2=td2, dq=dq, units="V")
 
-        self.eq = SourceAtom("eq", source_type=source_type, u0=vq0, u1=vq1,
-                             u2=vq2, ua=vqa, freq=freqq, phi=phiq, dmax=dmax,
+        self.eq = SourceAtom("eq", source_type=source_type, x0=vq0, x1=vq1,
+                             x2=vq2, xa=vqa, freq=freqq, phi=phiq, dmax=dmax,
                              duty=dutyq, t1=tq1, t2=tq2, dq=dq, units="V")
 
         self.id = StateAtom("id", x0=id0, coeffunc=self.aii, dq=dq, dmax=dmax,
@@ -312,7 +349,7 @@ class LimBranchDQ(Device):
                             units="A")
 
         self.add_atoms(self.ed, self.eq, self.id, self.iq)
-                
+
         self.id.add_connection(self.ed, coeffunc=self.bii)
         self.iq.add_connection(self.eq, coeffunc=self.bii)
 
@@ -351,11 +388,11 @@ class LimBranchDQ(Device):
 
 
 class LimNodeDQ(Device):
-    
+
     """
                         inoded                                inodeq
                            o                                     o
-                           |   | isumd                           |   | isumq  
+                           |   | isumd                           |   | isumq
                            |   v                                 |   v
     .----------------------+-------------------------------------+-------------.
     |                      |                                     |             |
@@ -365,7 +402,7 @@ class LimNodeDQ(Device):
     |(g+w*C) | <. vd'*C | ___ id(t)( ^ )   (g+w*C) | <. vq'*C | ___ iq(t)( ^ ) |
     |        | <.       |  |        `-'            | <.       |  |        `-'  |
     |          |           |         |                |          |         |   |
-    |          '-----------+---------'                '----------+---------'   |     
+    |          '-----------+---------'                '----------+---------'   |
     |                     _|_                                   _|_            |
     |                      -                                     -             |
     '--------------------------------------------------------------------------'
@@ -385,12 +422,12 @@ class LimNodeDQ(Device):
         self.vd0 = vd0
         self.vq0 = vq0
 
-        self.hd = SourceAtom("hd", source_type=source_type, u0=id0, u1=id1,
-                                  u2=id2, ua=ida, freq=freqd, phi=phid,
+        self.hd = SourceAtom("hd", source_type=source_type, x0=id0, x1=id1,
+                                  x2=id2, xa=ida, freq=freqd, phi=phid,
                                   duty=dutyd, t1=td1, t2=td2, dq=dq, units="A")
 
-        self.hq = SourceAtom("hq", source_type=source_type, u0=iq0, u1=iq1,
-                                  u2=iq2, ua=iqa, freq=freqq, phi=phiq,
+        self.hq = SourceAtom("hq", source_type=source_type, x0=iq0, x1=iq1,
+                                  x2=iq2, xa=iqa, freq=freqq, phi=phiq,
                                   duty=dutyq, t1=tq1, t2=tq2, dq=dq, units="A")
 
         self.vd = StateAtom("vd", x0=vd0, coeffunc=self.aii, dq=dq, units="V")
@@ -447,11 +484,11 @@ class SyncMachineDQ(Device):
 
     """
 
-    def __init__(self, name, Psm=25.0e6, VLL=4160.0, ws=60.0*pi,
+    def __init__(self, name, Psm=25.0e6, VLL=4160.0, ws=60.0*PI,
                  P=4, pf=0.80, rs=3.00e-3, Lls=0.20e-3, Lmq=2.00e-3,
                  Lmd=2.00e-3, rkq=5.00e-3, Llkq=0.04e-3, rkd=5.00e-3,
                  Llkd=0.04e-3, rfd=20.0e-3, Llfd=0.15e-3, vfdb=90.1, Kp=10.0e4,
-                 Ki=10.0e4, J=4221.7, fkq0=0.0, fkd0=0.0, ffd0=0.0, wr0=60.0*pi,
+                 Ki=10.0e4, J=4221.7, fkq0=0.0, fkd0=0.0, ffd0=0.0, wr0=60.0*PI,
                  th0=0.0, iqs0=0.0, ids0=0.0, dq_i=1e-2, dq_f=1e-2, dq_wr=1e-1,
                  dq_th=1e-3, dq_v=1e0):
 
@@ -459,20 +496,20 @@ class SyncMachineDQ(Device):
 
         # sm params:
 
-        self.Psm  = Psm  
-        self.VLL  = VLL  
-        self.ws   = ws  
-        self.P    = P    
-        self.pf   = pf  
-        self.rs   = rs  
-        self.Lls  = Lls 
-        self.Lmq  = Lmq 
-        self.Lmd  = Lmd 
-        self.rkq  = rkq 
+        self.Psm  = Psm
+        self.VLL  = VLL
+        self.ws   = ws
+        self.P    = P
+        self.pf   = pf
+        self.rs   = rs
+        self.Lls  = Lls
+        self.Lmq  = Lmq
+        self.Lmd  = Lmd
+        self.rkq  = rkq
         self.Llkq = Llkq
-        self.rkd  = rkd 
+        self.rkd  = rkd
         self.Llkd = Llkd
-        self.rfd  = rfd 
+        self.rfd  = rfd
         self.Llfd = Llfd
         self.vfdb = vfdb
 
@@ -480,18 +517,18 @@ class SyncMachineDQ(Device):
 
         self.Kp = Kp
         self.Ki = Ki
-        self.J  = J 
+        self.J  = J
 
         # intial conditions:
 
-        self.iqs0 = iqs0 
-        self.ids0 = ids0 
-        self.fkq0 = fkq0 
-        self.fkd0 = fkd0 
-        self.ffd0 = ffd0 
-        self.wr0 = wr0 
-        self.th0  = th0  
-        
+        self.iqs0 = iqs0
+        self.ids0 = ids0
+        self.fkq0 = fkq0
+        self.fkd0 = fkd0
+        self.ffd0 = ffd0
+        self.wr0 = wr0
+        self.th0  = th0
+
         dmax = 1e8
 
         # call super:
@@ -545,29 +582,29 @@ class SyncMachineDQ(Device):
 
         # jacobian:
 
-        self.ids.add_jacfunc(self.ids, self.jids_ids) 
-        self.ids.add_jacfunc(self.iqs, self.jids_iqs) 
-        self.ids.add_jacfunc(self.fkq, self.jids_fkq)  
+        self.ids.add_jacfunc(self.ids, self.jids_ids)
+        self.ids.add_jacfunc(self.iqs, self.jids_iqs)
+        self.ids.add_jacfunc(self.fkq, self.jids_fkq)
         self.ids.add_jacfunc(self.wr , self.jids_wr )
-        
-        self.iqs.add_jacfunc(self.ids, self.jiqs_ids) 
-        self.iqs.add_jacfunc(self.iqs, self.jiqs_iqs)  
-        self.iqs.add_jacfunc(self.fkd, self.jiqs_fkd) 
-        self.iqs.add_jacfunc(self.ffd, self.jiqs_ffd) 
+
+        self.iqs.add_jacfunc(self.ids, self.jiqs_ids)
+        self.iqs.add_jacfunc(self.iqs, self.jiqs_iqs)
+        self.iqs.add_jacfunc(self.fkd, self.jiqs_fkd)
+        self.iqs.add_jacfunc(self.ffd, self.jiqs_ffd)
         self.iqs.add_jacfunc(self.wr , self.jiqs_wr )
 
-        self.fkq.add_jacfunc(self.iqs, self.jfkq_iqs) 
-        self.fkq.add_jacfunc(self.fkq, self.jfkq_fkq) 
+        self.fkq.add_jacfunc(self.iqs, self.jfkq_iqs)
+        self.fkq.add_jacfunc(self.fkq, self.jfkq_fkq)
 
         self.fkd.add_jacfunc(self.ids, self.jfkd_ids)
-        self.fkd.add_jacfunc(self.fkd, self.jfkd_fkd) 
-        self.fkd.add_jacfunc(self.ffd, self.jfkd_ffd) 
+        self.fkd.add_jacfunc(self.fkd, self.jfkd_fkd)
+        self.fkd.add_jacfunc(self.ffd, self.jfkd_ffd)
 
-        self.ffd.add_jacfunc(self.ids, self.jffd_ids) 
-        self.ffd.add_jacfunc(self.fkd, self.jffd_fkd) 
+        self.ffd.add_jacfunc(self.ids, self.jffd_ids)
+        self.ffd.add_jacfunc(self.fkd, self.jffd_fkd)
         self.ffd.add_jacfunc(self.ffd, self.jffd_ffd)
-        
-        self.wr.add_jacfunc(self.wr  , self.jwr_wr ) 
+
+        self.wr.add_jacfunc(self.wr  , self.jwr_wr )
         self.wr.add_jacfunc(self.ids , self.jwr_ids )
         self.wr.add_jacfunc(self.iqs , self.jwr_iqs )
         self.wr.add_jacfunc(self.fkq , self.jwr_fkq )
@@ -575,7 +612,7 @@ class SyncMachineDQ(Device):
         self.wr.add_jacfunc(self.ffd , self.jwr_ffd )
         self.wr.add_jacfunc(self.th  , self.jwr_th  )
 
-        self.th.add_jacfunc(self.wr  ,  self.jth_wr ) 
+        self.th.add_jacfunc(self.wr  ,  self.jth_wr )
 
         # ports:
 
@@ -598,10 +635,10 @@ class SyncMachineDQ(Device):
         if avr:
             self.input = self.ffd.add_connection(avr.vfd, self.vfdb)
             self.ffd.add_jacfunc(avr.vfd, self.jffd_vfd)
-            
+
     def vtermd(self):
         return self.vd.value()
-        
+
     def vtermq(self):
         return self.vq.value()
 
@@ -626,38 +663,38 @@ class SyncMachineDQ(Device):
     @staticmethod
     def jids_ids(self, ids):
         return -self.rs/self.Lls
-    
+
     @staticmethod
     def jids_iqs(self, ids, iqs):
         return -(self.Lq * self.wr.q) / self.Lls
-    
+
     @staticmethod
     def jids_fkq(self, ids, fkq):
         return (self.Lmq * self.wr.q) / (self.Lls * (self.Lmq + self.Llkq))
-    
+
     @staticmethod
     def jids_wr(self, ids, wr):
         return (((self.Lmq * self.fkq.q) / (self.Lmq + self.Llkq)
                 - self.Lq * self.iqs.q) / self.Lls)
-    
+
     @staticmethod
     def jiqs_ids(self, iqs, ids):
         return (self.Ld * self.wr.q) / self.Lls
-    
+
     @staticmethod
     def jiqs_iqs(self, iqs):
         return -self.rs / self.Lls
-    
+
     @staticmethod
     def jiqs_fkd(self, iqs, fkd):
         return ((self.Lmd * self.wr.q) / (self.Llkd * self.Lls
                 * (self.Lmd / self.Llkd + self.Lmd / self.Llfd + 1)))
-    
+
     @staticmethod
     def jiqs_ffd(self, iqs, ffd):
         return ((self.Lmd * self.wr.q) / (self.Llfd * self.Lls
                 * (self.Lmd / self.Llkd + self.Lmd / self.Llfd + 1)))
-    
+
     @staticmethod
     def jiqs_wr(self, iqs, wr):
         return ((self.Ld * self.ids.q + (self.Lmd * (self.fkd.q / self.Llkd
@@ -667,11 +704,11 @@ class SyncMachineDQ(Device):
     @staticmethod
     def jfkq_iqs(self, fkq, iqs):
         return -((self.Lls - self.Lq) * self.rkq) / self.Llkq
-    
+
     @staticmethod
     def jfkq_fkq(self, fkq):
         return -((1 - self.Lmq / (self.Lmq + self.Llkq)) * self.rkq) / self.Llkq
- 
+
     @staticmethod
     def jfkd_ids(self, fkd, ids):
         return -((-self.Lls - self.Ld) * self.rkd) / self.Llkd
@@ -680,7 +717,7 @@ class SyncMachineDQ(Device):
     def jfkd_fkd(self, fkd):
         return (-((self.Lmd / (self.Llkd * (self.Lmd / self.Llkd + self.Lmd
                 / self.Llfd + 1)) + 1) * self.rkd) / self.Llkd)
-    
+
     @staticmethod
     def jfkd_ffd(self, fkd, ffd):
         return -(self.Lmd * self.rkd) / (self.Llfd * self.Llkd
@@ -689,12 +726,12 @@ class SyncMachineDQ(Device):
     @staticmethod
     def jffd_ids(self, ffd, ids):
         return -((-self.Lls - self.Ld) * self.rfd) / self.Llfd
-    
+
     @staticmethod
     def jffd_fkd(self, ffd, fkd):
         return (-(self.Lmd * self.rfd) / (self.Llfd * self.Llkd
                * (self.Lmd / self.Llkd + self.Lmd/self.Llfd + 1)))
-    
+
     @staticmethod
     def jffd_ffd(self, ffd):
         return (-((self.Lmd / (self.Llfd * (self.Lmd / self.Llkd + self.Lmd
@@ -703,7 +740,7 @@ class SyncMachineDQ(Device):
     @staticmethod
     def jwr_ids(self, wr, ids):
         return (0.75*self.P*(-self.Lq*self.iqs.q+self.Ld*self.iqs.q-(self.Lmq*self.fkq.q)/(self.Lmq+self.Llkq)))/self.J
-    
+
     @staticmethod
     def jwr_iqs(self, wr, iqs):
         return (0.75*self.P*(-self.Lq*self.ids.q+self.Ld*self.ids.q+(self.Lmd*(self.fkd.q/self.Llkd+self.ffd.q/self.Llfd))/(self.Lmd/self.Llkd+self.Lmd/self.Llfd+1.0)))/self.J
@@ -747,8 +784,8 @@ class SyncMachineDQ(Device):
                 * (self.Lmd * (self.fkd.q / self.Llkd + self.ffd.q / self.Llfd)
                 /  (1.0 + self.Lmd / self.Llfd + self.Lmd / self.Llkd))
                 - self.vtermq() - self.rs * iqs) / self.Lls)
-                             
-    @staticmethod      
+
+    @staticmethod
     def dfkq(self, fkq):
         return (-self.rkq / self.Llkq * (fkq - self.Lq * self.iqs.q
                 - (self.Lmq / (self.Lmq + self.Llkq) * fkq) + self.Lls * self.iqs.q))
@@ -784,22 +821,22 @@ class SyncMachineDQ(Device):
 class AC8B(Device):
 
     """IEEE AC8B Exciter
-                    
-                .--------.                                               
-    vref     .->|  Kpr   |----.                Vrmax                    
-      |      |  '--------'    |                ,---               (vfd)   
-    + v      |              + v       .-------'-.               .------.   
-     ,-.  e1 |  .--------. + ,-.  pid |   Ka    |    + ,-.  e2  |  1   |   
+
+                .--------.
+    vref     .->|  Kpr   |----.                Vrmax
+      |      |  '--------'    |                ,---               (vfd)
+    + v      |              + v       .-------'-.               .------.
+     ,-.  e1 |  .--------. + ,-.  pid |   Ka    |    + ,-.  e2  |  1   |
     ( Σ )----+->| Kir/s  |->( Σ )---->| ------- |---->( Σ )---->| ---- |---+--> vfd
      `-'     |  '--------'   `-'      | 1+s*Ta  |  vr  `-'      | s*Te |   |
     - ^      |  .--------.  + ^       '-,-------'     - ^       '------'   |
       |      |  | s*Kdr  |    |     ---'  (x3)          | vse              |
-     vt      '->| ------ |----'    Vrmin               ,-.    .--------.   | 
+     vt      '->| ------ |----'    Vrmin               ,-.    .--------.   |
                 | 1+s*Tr |                            ( Σ )<--| Se(Ve) |<--+
                 '--------'                             `-' +  '--------'   |
                                                       + ^      .----.      |
                  (x1, x2)                               '------| Ke |<-----'
-                                                               '----'     
+                                                               '----'
     """
 
     def __init__(self, name, VLL=4160.0, vref=1.0, Kpr=200.0, Kir=0.8,
@@ -882,33 +919,33 @@ class AC8B(Device):
     @staticmethod
     def jx1_vd(self, x1, vd):
         return -self.vd.value()/sqrt(self.vq.value()**2+self.vd.value()**2)
-    
+
     @staticmethod
     def jx1_vq(self, x1, vq):
         return -self.vq.value()/sqrt(self.vq.value()**2+self.vd.value()**2)
-    
+
     @staticmethod
     def jx2_x1(self, x2, x1):
         return 1
-    
+
     @staticmethod
     def jx3_x1(self, x3, x1):
         return self.Kir*self.Tdr-self.Kdr/self.Tdr
-    
+
     @staticmethod
     def jx3_x2(self, x3, x2):
         return self.Kir
-    
+
     @staticmethod
     def jx3_vd(self, x3, vd):
         return (-((self.Kpr*self.Tdr+self.Kdr)*self.vd.value())
                 /sqrt(self.vq.value()**2+self.vd.value()**2))
-    
+
     @staticmethod
-    def jx3_vq(self, x3, vq): 
+    def jx3_vq(self, x3, vq):
         return (-((self.Kpr*self.Tdr+self.Kdr)*self.vq.value())
                 /sqrt(self.vq.value()**2+self.vd.value()**2))
-    
+
     @staticmethod
     def jvfd_x3(self, vfd, x3):
         return self.Ka/(self.Ta*self.Te)
@@ -938,6 +975,252 @@ class AC8B(Device):
         return (self.Ka / self.Ta * self.x3.q - vfd * self.Ke) / self.Te
 
 
+class DCMotor(Device):
+
+    """
+
+    Jm * dwr = Kt * ia - Bm * wr
+    La * dia = -ra * ia + va - Ke * wr
+
+    dwr = (Kt * ia - Bm * wr) / Jm
+    dia = (-ra * ia + va - Ke * wr) / La
+
+              ia(t) -->
+
+             Ra    La                         (shaft)
+        o----VVV---UUU----.              .-------o------.
+     (inode)              |              |       |      |   +
+       +              +  ,^.    Kt * ia ,^.     <.     _|_
+       va               <   >          < ^ >  B <.   J ___  wr
+       -              -  `.' Ke * wr    `.'     <.      |
+     (jnode)              |              |       |      |   -
+        o-----------------'              '-------+------'
+                                                _|_
+                                                 -
+    """
+
+    def __init__(self, name, ra=0.1, La=0.01, Jm=0.1, Bm=0.001, Kt=0.1, Ke=0.1,
+                 ia0=0.0, wr0=0.0, dq_ia=1e-2, dq_wr=1e-1):
+
+        Device.__init__(self, name)
+
+        self.name = name
+
+        self.ra = ra
+        self.La = La
+        self.Jm = Jm
+        self.Bm = Bm
+        self.Kt = Kt
+        self.Ke = Ke
+
+        self.ia0 = ia0
+        self.wr0 = wr0
+
+        self.dq_ia = dq_ia
+        self.dq_wr = dq_wr
+
+        self.ia = StateAtom("ia", x0=ia0, derfunc=self.dia, der2func=self.d2ia,
+                            units="A", dq=dq_ia)
+
+        self.wr = StateAtom("wr", x0=wr0, derfunc=self.dwr, der2func=self.d2wr,
+                            units="rad/s", dq=dq_wr)
+
+        self.add_atoms(self.ia, self.wr)
+
+        #self.ia.add_connection(self.ia)
+        self.ia.add_connection(self.wr)
+
+        #self.wr.add_connection(self.wr)
+        self.wr.add_connection(self.ia)
+
+        self.ia.add_jacfunc(self.ia, self.jia_ia)
+        self.ia.add_jacfunc(self.wr, self.jia_wr)
+
+        self.wr.add_jacfunc(self.wr, self.jwr_wr)
+        self.wr.add_jacfunc(self.ia, self.jwr_ia)
+
+        self.vi = None
+        self.vj = None
+
+        self.current = self.ia
+
+    def connect(self, inode, jnode):
+
+        self.ia.add_connection(inode.voltage)
+        self.ia.add_connection(jnode.voltage)
+
+        self.ia.add_jacfunc(inode.voltage, self.jia_vi)
+        self.ia.add_jacfunc(jnode.voltage, self.jia_vj)
+
+        self.vi = inode.voltage
+        self.vj = jnode.voltage
+
+    @staticmethod
+    def dia(self, ia):
+        return (-self.Ke * self.wr.q - self.vj.q + self.vi.q - ia * self.ra) / self.La
+
+    @staticmethod
+    def dwr(self, wr):
+        return (self.Kt * self.ia.q - self.Bm * wr) / self.Jm
+
+    @staticmethod
+    def d2ia(self, ia, dia):
+        return (-self.Ke * self.wr.d - self.vi.d + self.vj.d - dia * self.ra) / self.La
+
+    @staticmethod
+    def d2wr(self, wr, dwr):
+        return (self.Kt * self.ia.d - self.Bm * dwr) / self.Jm
+
+    @staticmethod
+    def jia_ia(self, ia):
+        return -self.ra / self.La
+
+    @staticmethod
+    def jia_wr(self, ia, wr):
+        return -self.Ke / self.La
+
+    @staticmethod
+    def jia_vi(self, ia, vi):
+        return 1 / self.La
+
+    @staticmethod
+    def jia_vj(self, ia, vj):
+        return -1 / self.La
+
+    @staticmethod
+    def jwr_ia(self, wr, ia):
+        return self.Kt / self.Jm
+
+    @staticmethod
+    def jwr_wr(self, wr):
+        return -self.Bm / self.Jm
+
+
+class Converter(Device):
+
+    """                                              io
+                  ii (isum, branch)                 ---->
+                 ---->                              r     l
+                o-----+------.------.         .---VVV---UUU---o  (jnode, vpos)
+                      |      |      |  +      |               +
+                  ^  ,^.    <. g   _|_       ,^. +
+                h | <   >   <.     ___ vi   <   >  e          vo  (vpos - vneg)
+                     `.'    <.    c |        `.'
+                      |      |      |  -      |               -
+                      '------+------'         '---------------o  (inode, vneg)
+                            _|_
+                             -
+
+    ii = vi * g + dvi * c - h
+    e  = io * r + dio * l + vo
+
+    dvi = (-g * vi + i + h) / c
+    dio = (-v - io * r + e) / l
+
+
+    """
+
+    def __init__(self, name, r=0.0, l=0.01, c=0.01, g=0.0, freq=100.0, duty=1.0,
+                 io0=0.0, vi0=0.0, dq_i=None, dq_v=None):
+
+        Device.__init__(self, name)
+
+        self.name = name
+
+        self.r = r
+        self.l = l
+        self.c = c
+        self.g = g
+
+        self.freq = freq
+        self.duty = duty
+
+        self.io0 = io0
+        self.vi0 = vi0
+
+        self.dq_i = dq_i
+        self.dq_v = dq_v
+
+        self.vi = StateAtom("vi", x0=vi0, coeffunc=self.jvi_vi, units="V", dq=dq_v)
+
+        self.io = StateAtom("io", x0=io0, coeffunc=self.jio_io, units="A", dq=dq_i)
+
+        self.e = SourceAtom(name="e", source_type=SourceType.PWM, x1=0.0, x2=1.0,
+                            gainfunc=self.ke, freq=freq, duty=duty, dq=1.0)
+
+        self.h = SourceAtom(name="h", source_type=SourceType.PWM, x1=0.0, x2=-1.0,
+                            gainfunc=self.kh, freq=freq, duty=duty, dq=1.0)
+
+        self.add_atoms(self.io, self.vi, self.e, self.h)
+
+        self.vi.add_connection(self.h, coeffunc=self.jvi_h)
+        self.vi.add_jacfunc(self.vi, self.jvi_vi)
+
+        self.io.add_connection(self.e, coeffunc=self.jio_e)
+        self.io.add_jacfunc(self.io, self.jio_io)
+
+        # output connection aliases:
+
+        self.voltage = self.vi
+        self.current = self.io
+
+    def connect(self, branch, inode, jnode, terminal="j"):
+
+        self.io.add_connection(inode.voltage, coeffunc=self.jio_vneg)
+        self.io.add_connection(jnode.voltage, coeffunc=self.jio_vpos)
+
+        self.io.add_jacfunc(inode.voltage, self.jio_vneg)
+        self.io.add_jacfunc(jnode.voltage, self.jio_vpos)
+
+        if terminal == "i":
+            self.vi.add_connection(branch.current, coeffunc=self.jvi_ii)
+            self.vi.add_jacfunc(branch.current, self.jvi_ii)
+
+        elif terminal == "j":
+            self.voltage.add_connection(branch.current, coeffunc=self.jvi_ij)
+            self.voltage.add_jacfunc(branch.current, self.jvi_ij)
+
+    @staticmethod
+    def ke(self):
+        return self.vi.q
+
+    @staticmethod
+    def kh(self):
+        return self.io.q
+
+    @staticmethod
+    def jio_io(self, *args):
+        return -self.r / self.l
+
+    @staticmethod
+    def jvi_vi(self, *args):
+        return -self.g / self.c
+
+    @staticmethod
+    def jio_e(self, *args):
+        return 1.0 / self.l
+
+    @staticmethod
+    def jvi_h(self, *args):
+        return 1.0 / self.c
+
+    @staticmethod
+    def jio_vpos(self, *args):
+        return -1.0 / self.l
+
+    @staticmethod
+    def jio_vneg(self, *args):
+        return 1.0 / self.l
+
+    @staticmethod
+    def jvi_ii(self, *args):
+        return -1.0 / self.c
+
+    @staticmethod
+    def jvi_ij(self, *args):
+        return 1.0 / self.c
+
+
 class InductionMachineDQ(Device):
 
     """
@@ -954,7 +1237,7 @@ class InductionMachineDQ(Device):
 
     """
 
-    def __init__(self, name, ws=30*pi, P=4, Tb=26.53e3, Rs=31.8e-3,
+    def __init__(self, name, ws=30*PI, P=4, Tb=26.53e3, Rs=31.8e-3,
                  Lls=0.653e-3, Lm=38e-3, Rr=24.1e-3, Llr=0.658e-3, J=250.0,
                  iqs0=0.0, ids0=0.0, iqr0=0.0, idr0=0.0, wr0=0.0, dq_i=1e-2,
                  dq_wr=1e-1):
@@ -977,7 +1260,7 @@ class InductionMachineDQ(Device):
         self.iqr0 = iqr0
         self.idr0 = idr0
         self.wr0 = wr0
-        
+
         self.dq_i = dq_i
         self.dq_wr = dq_wr
 
@@ -992,7 +1275,7 @@ class InductionMachineDQ(Device):
         self.iqr = StateAtom("iqr", x0=iqr0, derfunc=self.diqr, units="A",     dq=dq_i)
         self.idr = StateAtom("idr", x0=idr0, derfunc=self.didr, units="A",     dq=dq_i)
         self.wr  = StateAtom("wr",  x0=wr0,  derfunc=self.dwr,  units="rad/s", dq=dq_wr)
-        
+
         self.add_atoms(self.iqs, self.ids, self.iqr, self.idr, self.wr)
 
         # atom connections:
@@ -1027,7 +1310,7 @@ class InductionMachineDQ(Device):
         self.iqs.add_jacfunc(self.iqr, self.jiqs_iqr)
         self.iqs.add_jacfunc(self.idr, self.jiqs_idr)
         self.iqs.add_jacfunc( self.wr, self.jiqs_wr )
-        
+
         self.ids.add_jacfunc(self.iqs, self.jids_iqs)
         self.ids.add_jacfunc(self.ids, self.jids_ids)
         self.ids.add_jacfunc(self.iqr, self.jids_iqr)
@@ -1073,7 +1356,7 @@ class InductionMachineDQ(Device):
 
     def vdr(self):
         return 0.0
-        
+
     def vqr(self):
         return 0.0
 
@@ -1114,10 +1397,10 @@ class InductionMachineDQ(Device):
 
     @staticmethod
     def dwr(self, wr):
-        return (self.P / (2.0 * self.J)) * (0.75 * self.P * ((self.Lls 
+        return (self.P / (2.0 * self.J)) * (0.75 * self.P * ((self.Lls
                 * self.ids.q + self.Lm * (self.ids.q + self.idr.q)) * self.iqs.q
                 - (self.Lls * self.iqs.q + self.Lm * (self.iqs.q + self.iqr.q))
-                * self.ids.q) - self.Tb * (wr / self.ws)**3) 
+                * self.ids.q) - self.Tb * (wr / self.ws)**3)
 
     @staticmethod
     def jiqs_iqs(self, iqs):
@@ -1282,7 +1565,7 @@ class TRLoadDQ(Device):
 
     """
 
-    def __init__(self, name, w=2*pi*60.0, alpha_cmd=0.0, Lc=76.53e-6, Rdc=0.0,
+    def __init__(self, name, w=2*PI*60.0, alpha_cmd=0.0, Lc=76.53e-6, Rdc=0.0,
                  Ldc=0.383e-3, R=3.16, C=0.384e-3, Nps=1.0, idc0=0.0, vdc0=0.0,
                  dq_i=1e0, dq_v=1e0):
 
@@ -1292,7 +1575,7 @@ class TRLoadDQ(Device):
 
         self.w = w
         self.alpha_cmd = alpha_cmd
-        self.Lc = Lc 
+        self.Lc = Lc
         self.Rdc = Rdc
         self.Ldc = Ldc
         self.R = R
@@ -1305,7 +1588,7 @@ class TRLoadDQ(Device):
         self.vdc0 = vdc0
 
         # delta q:
-                
+
         self.dq_i = dq_i
         self.dq_v = dq_v
 
@@ -1337,7 +1620,7 @@ class TRLoadDQ(Device):
 
         self.id.add_connection(self.idc)
         self.iq.add_connection(self.idc)
-        
+
         # ports:
 
         self.atomd = self.id
@@ -1377,7 +1660,7 @@ class TRLoadDQ(Device):
         mu = -self.alpha_cmd + acos(k)
         alpha = self.alpha_cmd
 
-        if mu >= PI_3 or mu + alpha >= pi:
+        if mu >= PI_3 or mu + alpha >= PI:
             mu = PI_3
             alpha = PI_3 - acos((2 * self.Lc * self.w * idc) / e)
 
@@ -1385,10 +1668,10 @@ class TRLoadDQ(Device):
 
     def iqg_com(self, vdg, vqg, idc, alpha, mu):
 
-        E = self.E(vdg, vqg)  
-        k1 = 2 * sqrt(3) / pi
-        k2 = 3 * sqrt(3) * E / (pi * self.Lc * self.w)
-        k3 = 3 * sqrt(2) * E / (4 * pi * self.Lc * self.w)
+        E = self.E(vdg, vqg)
+        k1 = 2 * sqrt(3) / PI
+        k2 = 3 * sqrt(3) * E / (PI * self.Lc * self.w)
+        k3 = 3 * sqrt(2) * E / (4 * PI * self.Lc * self.w)
 
         return (k1 * idc * (sin(mu + alpha - PI5_6) - sin(alpha - PI5_6))
               * k2 * cos(alpha) * (cos(mu + alpha) - cos(alpha))
@@ -1397,10 +1680,10 @@ class TRLoadDQ(Device):
     def idg_com(self, vdg, vqg, idc, alpha, mu):
 
         E = self.E(vdg, vqg)
-        k1 = 2 * sqrt(3) / pi
-        k2 = 3 * sqrt(2) * E / (pi * self.Lc * self.w)
-        k3 = 3 * sqrt(2) * E / (4 * pi * self.Lc * self.w)
-        k4 = 3 * sqrt(2) * E / (2 * pi * self.Lc * self.w)
+        k1 = 2 * sqrt(3) / PI
+        k2 = 3 * sqrt(2) * E / (PI * self.Lc * self.w)
+        k3 = 3 * sqrt(2) * E / (4 * PI * self.Lc * self.w)
+        k4 = 3 * sqrt(2) * E / (2 * PI * self.Lc * self.w)
 
         return (k1 * idc * (-cos(mu + alpha - PI5_6) + cos(alpha - PI5_6))
               * k2 * cos(alpha) * (sin(mu + alpha) - sin(alpha))
@@ -1408,10 +1691,10 @@ class TRLoadDQ(Device):
               - k4 * mu)
 
     def iqg_cond(self, idc, alpha, mu):
-        return 2 * sqrt(3) / pi * idc * (sin(alpha + PI7_6) - sin(alpha + mu + PI5_6))
+        return 2 * sqrt(3) / PI * idc * (sin(alpha + PI7_6) - sin(alpha + mu + PI5_6))
 
     def idg_cond(self, idc, alpha, mu):
-        return 2 * sqrt(3) / pi * idc * (-cos(alpha + PI7_6) + cos(alpha + mu + PI5_6))
+        return 2 * sqrt(3) / PI * idc * (-cos(alpha + PI7_6) + cos(alpha + mu + PI5_6))
 
     def iqg(self, idc, vdg, vqg, alpha, mu):
         return (self.iqg_com(vdg, vqg, idc, alpha, mu) + self.iqg_cond(idc, alpha, mu))
@@ -1450,10 +1733,10 @@ class TRLoadDQ(Device):
         vqg = self.vqg.q
         alpha, mu = self.get_angles(idc, vdg, vqg)
         E = self.E(vdg, vqg)
-        k1 = 3 * sqrt(3) * sqrt(2) / pi
+        k1 = 3 * sqrt(3) * sqrt(2) / PI
 
         e = k1 * E * cos(alpha)
-        req = self.Rdc + 3/pi * self.Lc * self.w
+        req = self.Rdc + 3/PI * self.Lc * self.w
 
         return (e - req * idc - self.vdc.q) / (self.Ldc + 2*self.Lc)
 
@@ -1469,11 +1752,11 @@ class TRLoadDQ2(Device):
 
     Sd = sqrt(3/2) * 2 * sqrt(3)/pi * cos(phi)
     Sq = -sqrt(3/2) * 2 * sqrt(3)/pi * sin(phi)
-    
+
     id = idc/Sd
     iq = idc/Sq
 
-    idc = Sd*id + Sq*iq 
+    idc = Sd*id + Sq*iq
 
     edc = Sd*vd + Sq*vq
 
@@ -1485,12 +1768,12 @@ class TRLoadDQ2(Device):
 
     did = (pi/(3*sqrt(2)*cos(phi))) * didc
     diq = (-pi/(3*sqrt(2)*sin(phi))) * didc
-    dedc = 
+    dedc =
 
     """
 
-    def __init__(self, name, w=2*pi*60.0, Lc=76.53e-6, Rdc=0.0,
-                 Ldc=0.383e-3, R=3.16, C=0.384e-3, id0=0.0,  
+    def __init__(self, name, w=2*PI*60.0, Lc=76.53e-6, Rdc=0.0,
+                 Ldc=0.383e-3, R=3.16, C=0.384e-3, id0=0.0,
                  vdc0=0.0, dq_i=1e0, dq_v=1e0):
 
         self.name = name
@@ -1498,7 +1781,7 @@ class TRLoadDQ2(Device):
         # params:
 
         self.w = w
-        self.Lc = Lc 
+        self.Lc = Lc
         self.Rdc = Rdc
         self.Ldc = Ldc
         self.R = R
@@ -1510,15 +1793,15 @@ class TRLoadDQ2(Device):
         self.vdc0 = vdc0
 
         # delta q:
-                
+
         self.dq_i = dq_i
         self.dq_v = dq_v
 
         # cached:
 
-        self.S = sqrt(3/2) * 2 * sqrt(3) / pi
+        self.S = sqrt(3/2) * 2 * sqrt(3) / PI
         self.S2 = self.S**2
-        self.Req = Rdc + 3 / pi * Lc * w
+        self.Req = Rdc + 3 / PI * Lc * w
         self.Leq = Ldc + 2 * Lc
 
         # call super:
@@ -1527,7 +1810,7 @@ class TRLoadDQ2(Device):
 
         # atoms:
 
-        self.iq = SourceAtom("iq", source_type=SourceType.CONSTANT, u0=0.0,
+        self.iq = SourceAtom("iq", source_type=SourceType.CONSTANT, x0=0.0,
                               units="A", dq=dq_i)
 
         self.id = StateAtom("id", x0=id0, derfunc=self.did, units="A", dq=dq_i)
@@ -1540,12 +1823,12 @@ class TRLoadDQ2(Device):
 
         self.id.add_connection(self.vdc)
         self.vdc.add_connection(self.id)
-        
+
         self.id.add_jacfunc(self.id, self.jid_id)
         self.id.add_jacfunc(self.vdc, self.jid_vdc)
         self.vdc.add_jacfunc(self.id, self.jvdc_id)
         self.vdc.add_jacfunc(self.vdc, self.jvdc_vdc)
-        
+
         # ports:
 
         self.vd = None  # terminal voltage d atom
@@ -1561,7 +1844,7 @@ class TRLoadDQ2(Device):
         return (self.vd.q * self.S2 - self.Req * id - self.vdc.q * self.S) / self.Leq
 
     @staticmethod
-    def dvdc(self, vdc):  # vdc depends on: id 
+    def dvdc(self, vdc):  # vdc depends on: id
         return (self.id.q / self.S - vdc / self.R) / self.C
 
     @staticmethod
@@ -1597,7 +1880,7 @@ class Pendulum(Device):
 
         self.omega = StateAtom("omega", x0=omega0, derfunc=self.domega, units="rad/s", dq=dq_omega)
         self.theta = StateAtom("theta", x0=theta0, derfunc=self.dtheta, units="rad",   dq=dq_theta)
-        
+
         self.add_atoms(self.omega, self.theta)
 
         self.omega.add_connection(self.theta)
@@ -1629,16 +1912,151 @@ class Pendulum(Device):
         return -self.r
 
 
+class LiqssTest(Device):
+
+    """Original Liqss test/demo stiff system from the paper
+
+    'Linearly Implicit Quantization–Based Integration
+    Methods for Stiff Ordinary Differential Equations'
+
+    dx1 = 0.01 * x2
+    dx2 = -100 * x1 - 100 * x2 + 2020
+
+    lambda1 ~= -0.01 and lambda2 ~= -100.0 (stiffness ratio of 1e4)
+
+    """
+
+    def __init__(self, name, x10=0.0, x20=20.0, dq1=1.0, dq2=1.0):
+
+        Device.__init__(self, name)
+
+        self.x1 = StateAtom("x1", x0=x10, derfunc=self.dx1, der2func=self.d2x1,
+                            units="", dq=dq1)
+
+
+        self.x2 = StateAtom("x2", x0=x20, derfunc=self.dx2, der2func=self.d2x2,
+                            units="", dq=dq2)
+
+        self.add_atoms(self.x1, self.x2)
+
+        #self.x1.broadcast_to.append(self.x2)
+        #self.x2.broadcast_to.append(self.x1)
+        #self.x2.broadcast_to.append(self.x2)
+
+        self.x1.add_connection(self.x2)
+        self.x2.add_connection(self.x1)
+        self.x2.add_connection(self.x2)
+
+        self.x1.add_jacfunc(self.x2, self.j12)
+        self.x2.add_jacfunc(self.x1, self.j21)
+        self.x2.add_jacfunc(self.x2, self.j22)
+
+    @staticmethod
+    def dx1(self, x1):
+        return 0.01 * self.x2.q
+
+    @staticmethod
+    def dx2(self, x2):
+        return -100 * self.x1.q - 100 * x2 + 2020
+
+    @staticmethod
+    def d2x1(self, x1, d1):
+        return 0.01 * self.x2.d
+
+    @staticmethod
+    def d2x2(self, x2, d2):
+        return -100 * self.x1.d - 100 * d2
+
+    @staticmethod
+    def j12(self, x1, x2):
+        return 0.01
+
+    @staticmethod
+    def j21(self, x2, x1):
+        return -100
+
+    @staticmethod
+    def j22(self, x2):
+        return -100
+
+
+class MLiqssTest(Device):
+
+    """mLiqss test/demo system from the paper:
+
+    'Improving Linearly Implicit Quantized State System Methods'
+
+    dx1 = -x1 - x2 + 0.2
+    dx2 = x1 - x2 + 1.2
+
+    """
+
+    def __init__(self, name, x10=-4.0, x20=4.0, dq1=1.0, dq2=1.0):
+
+        Device.__init__(self, name)
+
+        self.x1 = StateAtom("x1", x0=x10, derfunc=self.dx1, der2func=self.ddx1,
+                            units="", dq=dq1)
+
+
+        self.x2 = StateAtom("x2", x0=x20, derfunc=self.dx2, der2func=self.ddx2,
+                            units="", dq=dq2)
+
+        self.add_atoms(self.x1, self.x2)
+
+        #self.x1.add_connection(self.x1)
+        self.x1.add_connection(self.x2)
+        self.x2.add_connection(self.x1)
+        #self.x2.add_connection(self.x2)
+
+        self.x1.add_jacfunc(self.x1, self.j11)
+        self.x1.add_jacfunc(self.x2, self.j12)
+        self.x2.add_jacfunc(self.x1, self.j21)
+        self.x2.add_jacfunc(self.x2, self.j22)
+
+    @staticmethod
+    def dx1(self, x1):
+        return -x1 - self.x2.q + 0.2
+
+    @staticmethod
+    def dx2(self, x2):
+        return self.x1.q - x2 + 1.2
+
+    @staticmethod
+    def ddx1(self, x1, dx1):
+        return -dx1 - self.x2.dx
+
+    @staticmethod
+    def ddx2(self, x2, dx2):
+        return self.x1.dx - dx2
+
+    @staticmethod
+    def j11(self, x1):
+        return -1.0
+
+    @staticmethod
+    def j12(self, x1, x2):
+        return -1.0
+
+    @staticmethod
+    def j21(self, x2, x1):
+        return 1.0
+
+    @staticmethod
+    def j22(self, x2):
+        return -1.0
+
+
 class CoupledPendulums(Device):
 
-    """  
-    dw1 = (-g/l1 * sin(th1)/cos(th1) + w1*w1 * sin(th1)/cos(th1) 
-          + k*l2/(m1*l1) * sin(th2) / cos(th1) 
-          + k*l1/(m1*l1) * sin(th1) / cos(th1)) 
+    """
+    dw1 = (-g/l1 * sin(th1)/cos(th1) + w1*w1 * sin(th1)/cos(th1)
+          + k*l2/(m1*l1) * sin(th2) / cos(th1)
+          + k*l1/(m1*l1) * sin(th1) / cos(th1))
 
-    dw2 = )-g/l2 * sin(th2)/cos(th2) + w2*w2 * sin(th2)/cos(th2)
+    dw2 = (-g/l2 * sin(th2)/cos(th2) + w2*w2 * sin(th2)/cos(th2)
           + k*l1/(m2*l2) * sin(th1) / cos(th2)
-          + k*l2/(m2*l2) * sin(th2) / cos(th2)) 
+          + k*l2/(m2*l2) * sin(th2) / cos(th2))
 
     dth1 = w1
     dth2 = w2
@@ -1661,18 +2079,47 @@ class CoupledPendulums(Device):
 
         self.g = 9.81
 
-        self.w1  = StateAtom("w1",  x0=w10,  derfunc=self.dw1,  units="rad/s", dq=dq_w)
-        self.th1 = StateAtom("th1", x0=th10, derfunc=self.dth1, units="rad",   dq=dq_th)
-        self.w2  = StateAtom("w2",  x0=w20,  derfunc=self.dw2,  units="rad/s", dq=dq_w)
-        self.th2 = StateAtom("th2", x0=th20, derfunc=self.dth2, units="rad",   dq=dq_th)
+        self.w1  = StateAtom("w1", x0=w10,  derfunc=self.dw1,
+                             der2func=self.d2w1, units="rad/s", dq=dq_w)
+
+
+        self.th1 = StateAtom("th1", x0=th10, derfunc=self.dth1,
+                             der2func=self.d2w2, units="rad", dq=dq_th)
+
+
+        self.w2  = StateAtom("w2", x0=w20, derfunc=self.dw2,
+                             der2func=self.d2th1, units="rad/s", dq=dq_w)
+
+
+        self.th2 = StateAtom("th2", x0=th20, derfunc=self.dth2,
+                             der2func=self.d2th2, units="rad", dq=dq_th)
+
 
         self.add_atoms(self.w1, self.th1, self.w2, self.th2)
 
+        """
+        dw1 = (-g/l1 * sin(th1)/cos(th1) + w1*w1 * sin(th1)/cos(th1)
+              + k*l2/(m1*l1) * sin(th2) / cos(th1)
+              + k*l1/(m1*l1) * sin(th1) / cos(th1))
+
+        dw2 = )-g/l2 * sin(th2)/cos(th2) + w2*w2 * sin(th2)/cos(th2)
+              + k*l1/(m2*l2) * sin(th1) / cos(th2)
+              + k*l2/(m2*l2) * sin(th2) / cos(th2))
+
+        dth1 = w1
+        dth2 = w2
+
+        """
+
+        #self.w1.add_connection(self.w1)
         self.w1.add_connection(self.th1)
         self.w1.add_connection(self.w2)
-        self.th1.add_connection(self.w1)
+
+        #self.w2.add_connection(self.w2)
         self.w2.add_connection(self.th2)
         self.w2.add_connection(self.w1)
+
+        self.th1.add_connection(self.w1)
         self.th2.add_connection(self.w2)
 
         # jacobian:
@@ -1680,9 +2127,11 @@ class CoupledPendulums(Device):
         self.w1.add_jacfunc(self.th1, self.jw1_th1)
         self.w1.add_jacfunc(self.th2, self.jw1_th2)
         self.w1.add_jacfunc(self.w1, self.jw1_w1)
+
         self.w2.add_jacfunc(self.th1, self.jw2_th1)
         self.w2.add_jacfunc(self.th2, self.jw2_th2)
         self.w2.add_jacfunc(self.w2, self.jw2_w2)
+
         self.th1.add_jacfunc(self.w1, self.jth1_w1)
         self.th2.add_jacfunc(self.w2, self.jth2_w2)
 
@@ -1698,7 +2147,7 @@ class CoupledPendulums(Device):
                 + self.k * self.l2/(self.m1 * self.l1)
                 * sin(self.th2.q) / cos(self.th1.q)
                 + self.k * self.l1 / (self.m1 * self.l1)
-                * sin(self.th1.q) / cos(self.th1.q)) 
+                * sin(self.th1.q) / cos(self.th1.q))
 
     @staticmethod
     def dth2(self, th2):
@@ -1712,34 +2161,69 @@ class CoupledPendulums(Device):
                 + self.k * self.l1 / (self.m2 * self.l2)
                 * sin(self.th1.q) / cos(self.th2.q)
                 + self.k * self.l2 / (self.m2 * self.l2)
-                * sin(self.th2.q) / cos(self.th2.q)) 
+                * sin(self.th2.q) / cos(self.th2.q))
+
+    @staticmethod
+    def d2w1(self, w1, dw1):
+        return ((2 * w1 * sin(self.th1.q) * dw1) / cos(self.th1.q)
+                + (self.k * self.l2 * cos(self.th2.q) * self.th2.d)
+                / (self.l1 * self.m1 * cos(self.th1.q)) + (self.k * self.l2
+                * sin(self.th1.q) * self.th1.d * sin(self.th2.q)) / (self.l1
+                * self.m1 * cos(self.th1.q)**2) + (w1**2 * sin(self.th1.q)**2
+                * self.th1.d) / cos(self.th1.q)**2 + (self.k
+                * sin(self.th1.q)**2 * self.th1.d) / (self.m1
+                * cos(self.th1.q)**2) - (self.g * sin(self.th1.q)**2
+                * self.th1.d) / (self.l1 * cos(self.th1.q)**2) + w1**2
+                * self.th1.d + (self.k * self.th1.d) / self.m1 - (self.g
+                * self.th1.d) / self.l1)
+
+    @staticmethod
+    def d2w2(self, w2, dw2):
+        return ((2 * w2 * sin(self.th2.q) * dw2) / cos(self.th2.q)
+                + (w2**2 * sin(self.th2.q)**2 * self.th2.d) / cos(self.th2.q)**2
+                + (self.k * sin(self.th2.q)**2 * self.th2.d) / (self.m2
+                * cos(self.th2.q)**2) - (self.g * sin(self.th2.q)**2
+                * self.th2.d) / (self.l2 * cos(self.th2.q)**2) + (self.k * self.l1
+                * sin(self.th1.q) * sin(self.th2.q) * self.th2.d) / (self.l2
+                * self.m2 * cos(self.th2.q)**2) + w2**2 *self.th2.d
+                + (self.k * self.th2.d) / self.m2 - (self.g * self.th2.d)
+                / self.l2 + (self.k * self.l1 *cos(self.th1.q) * self.th1.d)
+                / (self.l2 * self.m2 * cos(self.th2.q)))
+
+    @staticmethod
+    def d2th1(self, th1, dth1):
+        return self.w1.d
+
+    @staticmethod
+    def d2th2(self, th2, dth2):
+        return self.w2.d
 
     @staticmethod
     def jw1_th1(self, w1, th1):
         return (sin(th1)**2 * w1**2
                 / cos(th1)**2 + w1**2
-                + self.k * self.l2 * sin(th1) * sin(self.th2.q) 
+                + self.k * self.l2 * sin(th1) * sin(self.th2.q)
                 / (self.l1 * self.m1 * cos(th1)**2)
                 + (self.k * sin(th1)**2)
                 / (self.m1 * cos(th1)**2)
                 - (self.g * sin(th1)**2)
                 / (self.l1 * cos(th1)**2)
                 + self.k / self.m1 - self.g / self.l1)
-	 
+
     @staticmethod
     def jw1_th2(self, w1, th2):
         return (self.k * self.l2 * cos(th2)
                / (self.l1 * self.m1 * cos(self.th1.q)))
-	
+
     @staticmethod
     def jw1_w1(self, w1):
-        return 2.0 * sin(self.th1.q) * w1 / cos(self.th1.q) 
-	
+        return 2.0 * sin(self.th1.q) * w1 / cos(self.th1.q)
+
     @staticmethod
     def jw2_th1(self, w2, th1):
         return (self.k * self.l1 * cos(th1)
                 / (self.l2 * self.m2 * cos(self.th2.q)))
-	
+
     @staticmethod
     def jw2_th2(self, w2, th2):
         return (sin(th2)**2 * w2**2
@@ -1751,19 +2235,19 @@ class CoupledPendulums(Device):
                 + (self.k * self.l1 * sin(self.th1.q) * sin(th2))
                 / (self.l2 * self.m2 * cos(th2)**2)
                 + self.k / self.m2 - self.g / self.l2)
-	
+
     @staticmethod
     def jw2_w2(self, w2):
-        return 2.0 * sin(self.th2.q) * w2 / cos(self.th2.q)	
+        return 2.0 * sin(self.th2.q) * w2 / cos(self.th2.q)
 
     @staticmethod
     def jth1_w1(self, th, w1):
-        return 1.0	
+        return 1.0
 
     @staticmethod
     def jth2_w2(self, th2, w2):
-        return 1.0	
-                      
+        return 1.0
+
 
 class Pendulum2(SymbolicDevice):
 
@@ -1821,7 +2305,7 @@ class LimBranch2(SymbolicDevice):
 
 class LimNodeDQ2(SymbolicDevice):
 
-    def __init__(self, name, c, g=0.0, ws=2*pi*60, theta=0.0, h=0.0, vd0=0.0, 
+    def __init__(self, name, c, g=0.0, ws=2*pi*60, theta=0.0, h=0.0, vd0=0.0,
                  vq0=0.0, dq=None):
 
         SymbolicDevice.__init__(self, name)
@@ -1843,7 +2327,7 @@ class LimNodeDQ2(SymbolicDevice):
 
 class LimBranchDQ2(SymbolicDevice):
 
-    def __init__(self, name, l, r=0.0, ws=2*pi*60, theta=0.0, e=0.0, id0=0.0, 
+    def __init__(self, name, l, r=0.0, ws=2*pi*60, theta=0.0, e=0.0, id0=0.0,
                  iq0=0.0, dq=None):
 
         SymbolicDevice.__init__(self, name)
@@ -1891,14 +2375,14 @@ class InductionMachineDQ2(SymbolicDevice):
 
         self.add_dq_port("terminal", inputs=("vds", "vqs"), outputs=("ids", "iqs"))
 
-        self.add_algebraic("fqs", "Lls * iqs + Lm * (iqs + iqr)") 
-        self.add_algebraic("fds", "Lls * ids + Lm * (ids + idr)") 
-        self.add_algebraic("fqr", "Llr * iqr + Lm * (iqr + iqs)") 
+        self.add_algebraic("fqs", "Lls * iqs + Lm * (iqs + iqr)")
+        self.add_algebraic("fds", "Lls * ids + Lm * (ids + idr)")
+        self.add_algebraic("fqr", "Llr * iqr + Lm * (iqr + iqs)")
         self.add_algebraic("fdr", "Llr * idr + Lm * (idr + ids)")
         self.add_algebraic("Tm", "Tb * (wr / ws)**3")
         self.add_algebraic("Te", "-3/2 * P/2 * (fds * iqs - fqs * ids)")
 
-        self.add_diffeq("Rs * iqs + wr * fds + (Lls + Lm) * diqs_dt + Lm * diqr_dt - vqs") 
+        self.add_diffeq("Rs * iqs + wr * fds + (Lls + Lm) * diqs_dt + Lm * diqr_dt - vqs")
         self.add_diffeq("Rs * ids - wr * fqs + (Lls + Lm) * dids_dt + Lm * didr_dt - vds")
         self.add_diffeq("Rr * iqr + (ws - wr) * fdr + (Llr + Lm) * diqr_dt + Lm * diqs_dt")
         self.add_diffeq("Rr * idr - (ws - wr) * fqr + (Llr + Lm) * didr_dt + Lm * dids_dt")
@@ -1924,7 +2408,7 @@ class SyncMachineDQ2(SymbolicDevice):
         self.add_parameter("Lmd" , value=Lmd )
         self.add_parameter("rkq" , value=rkq )
         self.add_parameter("Llkq", value=Llkq)
-        self.add_parameter("rkd" , value=rkd ) 
+        self.add_parameter("rkd" , value=rkd )
         self.add_parameter("Llkd", value=Llkd)
         self.add_parameter("rfd" , value=rfd )
         self.add_parameter("Llfd", value=Llfd)
@@ -1935,7 +2419,7 @@ class SyncMachineDQ2(SymbolicDevice):
         self.add_parameter("vfd" , value=vfdb)
 
         self.add_state("fkq", "dfkq_dt", units="Wb"   , x0=fkq0, dq=dq_f )
-        self.add_state("fkd", "dfkd_dt", units="Wb"   , x0=fkd0, dq=dq_f ) 
+        self.add_state("fkd", "dfkd_dt", units="Wb"   , x0=fkd0, dq=dq_f )
         self.add_state("ffd", "dffd_dt", units="Wb"   , x0=ffd0, dq=dq_f )
         self.add_state("wr" , "dwr_dt" , units="rad/s", x0=wr0 , dq=dq_wr)
         self.add_state("th" , "dth_dt" , units="rad"  , x0=th0 , dq=dq_th)
@@ -1944,34 +2428,36 @@ class SyncMachineDQ2(SymbolicDevice):
 
         self.add_dq_port("terminal", inputs=("vds", "vqs"), outputs=("ids", "iqs"))
 
-        self.add_output_port("vterm", expr="sqrt(vds**2 + vqs**2) / VLL")
-        self.add_input_port("vfd", expr="")
+        self.add_output_port("vterm", output="vterm")
+        self.add_input_port("vfd", input="vfd")
 
-        self.add_algebraic("Lq", "Lls + (Lmq * Llkq) / (Llkq + Lmq)") 
-        self.add_algebraic("Ld", "Lls + (Lmd * Llfd * Llkd) / (Lmd * Llfd + Lmd * Llkd + Llfd * Llkd)") 
-        self.add_algebraic("fq", "Lmq / (Lmq + Llkq) * fkq") 
+        self.add_algebraic("Lq", "Lls + (Lmq * Llkq) / (Llkq + Lmq)")
+        self.add_algebraic("Ld", "Lls + (Lmd * Llfd * Llkd) / (Lmd * Llfd + Lmd * Llkd + Llfd * Llkd)")
+        self.add_algebraic("fq", "Lmq / (Lmq + Llkq) * fkq")
         self.add_algebraic("fd", "Lmd * (Lmd * (fkd / Llkd + ffd / Llfd)) / (1 + Lmd / Llfd + Lmd / Llkd)")
         self.add_algebraic("Te", "3/2 * P/2 * (fds * iqs - fqs * ids)")
         self.add_algebraic("Tm", "Kp * (ws - wr) + th * Ki")
+        self.add_algebraic("vterm", "sqrt(vds**2 + vqs**2)")
 
         self.add_diffeq("diqs_dt * Lls + rs * iqs + wr * Ld + wr * fd - vqs")
         self.add_diffeq("dids_dt * Lls + rs * ids - wr * Lq - wr * fq - vds")
         self.add_diffeq("dfkq_dt * Llkq + rkq * (fkq - Lq * iqs - fq + Lls * iqs)")
         self.add_diffeq("dfkd_dt * Llkd + rkd * (fkd - Ld * ids + fd + Lls * ids)")
-        self.add_diffeq("dffd_dt * Llfd + rfd * (ffd - Ld * ids + fd + Lls * ids) - vfd")
+        self.add_diffeq("dffd_dt * Llfd + rfd * (ffd - Ld * ids + fd + Lls * ids) - vfd*VLL")
         self.add_diffeq("dwr_dt * J + Tm - Te")
         self.add_diffeq("dth_dt + wr - ws")
 
 
 class Exciter(SymbolicDevice):
 
-    def __init__(self, name, vref=1.0, Kpr=200.0, Kir=0.8, Kdr=1e-3, Tdr=1e-3,
+    def __init__(self, name, VLL=4160, vref=1.0, Kpr=200.0, Kir=0.8, Kdr=1e-3, Tdr=1e-3,
                  Ka=1.0, Ta=1e-4, Vrmin=0.0, Vrmax=5.0, Te=1.0, Ke=1.0, x10=0.0,
-                 x20=0.0, x30=0.0, vfd0=0.0, dq_x1=1e-8, dq_x2=1e-8, dq_x3=1e-5,
-                 dq_vfd=1e-2):
+                 x20=0.0, x30=0.0, vout0=0.0, dq_x1=1e-8, dq_x2=1e-8, dq_x3=1e-5,
+                 dq_vout=1e-2):
 
         SymbolicDevice.__init__(self, name)
 
+        self.add_parameter("VLL"  , value=VLL  )
         self.add_parameter("vref" , value=vref )
         self.add_parameter("Kpr"  , value=Kpr  )
         self.add_parameter("Kir"  , value=Kir  )
@@ -1984,17 +2470,65 @@ class Exciter(SymbolicDevice):
         self.add_parameter("Te"   , value=Te   )
         self.add_parameter("Ke"   , value=Ke   )
 
-        self.add_state("x1",  "dx1_dt",  x0=x10,  dq=dq_x1)
-        self.add_state("x2",  "dx2_dt",  x0=x20,  dq=dq_x2)
-        self.add_state("x3",  "dx3_dt",  x0=x30,  dq=dq_x3)
-        self.add_state("vfd", "dvfd_dt", x0=vfd0, dq=dq_vfd)
+        self.add_state("x1",   "dx1_dt",    x0=x10,   dq=dq_x1  )
+        self.add_state("x2",   "dx2_dt",    x0=x20,   dq=dq_x2  )
+        self.add_state("x3",   "dx3_dt",    x0=x30,   dq=dq_x3  )
+        self.add_state("vout", "dvout_dt",  x0=vout0, dq=dq_vout)
 
-        self.add_input_port("vterm", state="vterm")
-        self.add_output_port("vfd", state="vfd")
+        self.add_input_port("vterm", intput="vterm")
+        self.add_output_port("vfd", output="vout")
 
-        self.add_algebraic("vin", "vref - vterm") 
+        self.add_algebraic("vin", "vref - vterm / VLL")
 
         self.add_diffeq("dx1_dt + 1/Tdr * x1 - vin")
         self.add_diffeq("dx2_dt - x1")
         self.add_diffeq("dx3_dt - ((-Kdr/(Tdr**2) + Kir)*x1 + Kir/Tdr * x2 - 1/Ta * x3 + (Kdr/Tdr + Kpr) * vin)")
-        self.add_diffeq("dvfd_dt - (Ka/Ta * x3 - 1/Te * (vfd * Te / Ke))")
+        self.add_diffeq("dvout_dt - (Ka/Ta * x3 - 1/Te * (vout * Te / Ke))")
+
+
+
+class Ground(SymbolicDevice):
+
+    def __init__(self, name):
+
+        SymbolicDevice.__init__(self, name)
+
+        self.add_electrical_port("positive", output="v", input="i")
+
+        self.add_algebraic("v", "0")
+
+
+
+class DCMotorSym(SymbolicDevice):
+
+    def __init__(self, name, Vs=10, Gs=1e2, Cl=1e-6, Ra=0.1, La=0.001, Ke=0.1, Kt=0.1,
+                 Jm=0.01, Bm=0.001, Jp=0.01, Fp=1, JL=0.5, TL=0, BL=0.1,
+                 ia0=0.0, wr0=0.0, dq_ia=1e-1, dq_wr=1e-1):
+
+        SymbolicDevice.__init__(self, name)
+
+        self.add_parameter("Vs", desc="", units="", value=Vs)
+        self.add_parameter("Gs", desc="", units="", value=Gs)
+        self.add_parameter("Cl", desc="", units="", value=Cl)
+        self.add_parameter("Ra", desc="", units="", value=Ra)
+        self.add_parameter("La", desc="", units="", value=La)
+        self.add_parameter("Ke", desc="", units="", value=Ke)
+        self.add_parameter("Kt", desc="", units="", value=Kt)
+        self.add_parameter("Jm", desc="", units="", value=Jm)
+        self.add_parameter("Bm", desc="", units="", value=Bm)
+        self.add_parameter("Jp", desc="", units="", value=Jp)
+        self.add_parameter("Fp", desc="", units="", value=Fp)
+        self.add_parameter("JL", desc="", units="", value=JL)
+        self.add_parameter("TL", desc="", units="", value=TL)
+        self.add_parameter("BL", desc="", units="", value=BL)
+
+        self.add_state("ia", "dia_dt", desc="Armature Current", units="A",     x0=ia0, dq=dq_ia)
+        self.add_state("wr", "dwr_dt", desc="Rotor Speed",      units="rad/s", x0=wr0, dq=dq_wr)
+
+        self.add_electrical_port("positive", output="i", input="vpos")
+        self.add_electrical_port("negative", output="i", input="vneg", sign=-1)
+
+        self.add_diffeq("La * dia_dt + Ra * ia + Ke * wr - (vpos - vneg)")
+        self.add_diffeq("Jm * dwr_dt + Bm * wr - Kt * ia + TL")
+
+

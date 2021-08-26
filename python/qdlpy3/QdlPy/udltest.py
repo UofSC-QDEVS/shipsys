@@ -201,12 +201,8 @@ def test5():
 
     sys = System(dq=1e-3)
 
-    sm = SyncMachineDQ2("sm", vfdb=vfdb, VLL=VLL, dq_i=dq_i, dq_v=dq_v,
-                        dq_th=dq_th, dq_wr=dq_wr, dq_f=dq_f)
-
-    #avr = AC8B("avr", vref=vref, dq_x1=dq_x1, dq_x2=dq_x2, dq_x3=dq_x3,
-    #           dq_vfd=dq_vfd)
-
+    sm = SyncMachineDQ2("sm", vfdb=vfdb, VLL=VLL, dq_i=dq_i, dq_v=dq_v, dq_th=dq_th, dq_wr=dq_wr, dq_f=dq_f)
+    avr = AC8B("avr", VLL=VLL, vref=vref, dq_x1=dq_x1, dq_x2=dq_x2, dq_x3=dq_x3, dq_vfd=dq_vfd)
     bus1 = LimNodeDQ2("bus1", c=1e-3, g=1e-4, ws=ws, vd0=VLL, vq0=VLL, dq=dq_v)
     bus2 = LimNodeDQ2("bus2", c=1e-3, g=1e-4, ws=ws, vd0=VLL, vq0=VLL, dq=dq_v)
     cable = LimBranchDQ2("cable", l=2.3e-5, r=0.865e-2, ws=ws, dq=dq_i)
@@ -214,15 +210,16 @@ def test5():
     im = InductionMachineDQ2("im", ws=ws/2, P=4, wr0=ws/2, dq_i=dq_i/10, dq_wr=dq_wr, Tb=0.0)
     gnd = LimNodeDQ2("gnd", c=1e-3, g=0.0, ws=ws, vd0=0.0, vq0=0.0, dq=dq_v)
 
-    sys.connectdq(sm.terminal, bus1.positive)
+    sys.connect(sm.terminal, bus1.positive)
 
-    sys.connectdq(cable.positive, bus1.positive)
-    sys.connectdq(cable.negative, bus2.positive)
+    sys.connect(sm.vterm, avr.vterm)
+    sys.connect(avr.vfd, sm.vfd)
 
-    sys.connectdq(load.positive, bus2.positive)
-    sys.connectdq(load.negative, gnd.positive)
-
-    sys.connectdq(im.terminal, bus2.positive)
+    sys.connect(cable.positive, bus1.positive)
+    sys.connect(cable.negative, bus2.positive)
+    sys.connect(load.positive, bus2.positive)
+    sys.connect(load.negative, gnd.positive)
+    sys.connect(im.terminal, bus2.positive)
 
     sys.add_devices(sm, bus1, cable, bus2, load, im, gnd)
 
@@ -251,13 +248,13 @@ def test5():
     plotargs = {"plot_ode":ode, "plot_qss":qss, "plot_zoh":qss,
                 "plot_qss_updates":True, "errorband":True}
 
-    sys.plot(sm.wr, im.wr, sm.th, **plotargs    ) # , pth=r".\plots\sm.pdf")
-    #sys.plot(avr.x1, avr.x2, avr.x3, **plotargs ) # , pth=r".\plots\avr.pdf")
-    sys.plot(cable.id, cable.iq,  **plotargs    ) # , pth=r".\plots\cable.pdf")
-    sys.plot(bus1.vd, bus1.vq, **plotargs       ) # , pth=r".\plots\bus1.pdf")
-    sys.plot(bus2.vd, bus2.vq, **plotargs       ) # , pth=r".\plots\bus2.pdf")
-    #sys.plot(trload.id, trload.iq, **plotargs   ) # , pth=r".\plots\tr.pdf")
-    sys.plot(load.id, load.iq, **plotargs       ) # , pth=r".\plots\load.pdf")
+    sys.plot(sm.wr,     im.wr,     sm.th,  **plotargs) # , pth=r".\plots\sm.pdf")
+    sys.plot(avr.x1,    avr.x2,    avr.x3, **plotargs) # , pth=r".\plots\avr.pdf")
+    sys.plot(cable.id,  cable.iq,          **plotargs) # , pth=r".\plots\cable.pdf")
+    sys.plot(bus1.vd,   bus1.vq,           **plotargs) # , pth=r".\plots\bus1.pdf")
+    sys.plot(bus2.vd,   bus2.vq,           **plotargs) # , pth=r".\plots\bus2.pdf")
+    sys.plot(trload.id, trload.iq,         **plotargs) # , pth=r".\plots\tr.pdf")
+    sys.plot(load.id,   load.iq,           **plotargs) # , pth=r".\plots\load.pdf")
 
     #sys.plotxy(sm.wr, sm.th, arrows=False, ss_region=True, auto_limits=True)
 
@@ -265,7 +262,7 @@ def test5():
 if __name__ == "__main__":
 
     #test1()
-    test2()
+    #test2()
     #test3()
     #test4()
-    #test5()
+    test5()

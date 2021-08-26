@@ -1,0 +1,44 @@
+{
+    "models": [
+        {
+            
+            "name": "LimNode",
+
+            "parameters": [
+                {
+                    "name": "c",
+                    "desc": "Capacitance",
+                    "units": "F"
+                },
+                {
+                    "name": "g",
+                    "desc": "Conductance",
+                    "units": "F"
+                },
+                {
+                    "name": "h",
+                    "desc": "Source Current",
+                    "units": "A"
+                }
+            ],
+            "states": [
+                {
+                    "name": "v",
+                    "desc": "Voltage",
+                    "units": "V",
+                    "derivative": "(g * v - h - isum) / c"
+                }
+            ],
+            "ports": [
+                {
+                    "name": "positive",
+                    "type": "electrical",
+                    "outvar": "v",
+                    "invar": "isum"
+                }
+            ],
+            "algebraic": [
+            ]
+        }
+    ]
+}
