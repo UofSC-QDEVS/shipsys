@@ -35,6 +35,7 @@ from math import isclose as ISCLOSE
 # temporary:
 
 from math import pi, sin, cos, acos, tan, acos, atan2, sqrt, floor as FLOOR
+from cmath import sqrt as csqrt
 
 from collections import deque
 from collections import OrderedDict as odict
@@ -54,6 +55,7 @@ from scipy.integrate import solve_ivp
 from scipy.optimize import fsolve
 from scipy.interpolate import interp1d
 from scipy.stats import gaussian_kde
+from scipy.linalg import eig, eigh
 
 import lti
 
@@ -69,10 +71,10 @@ _MAXITER = 1000
 # ============================ Public Constants ================================
 
 
-DEF_DTMIN = 1e-12        # default minimum time step
+DEF_DTMIN = 1e-12      # default minimum time step
 DEF_DMAX = 1.0e5       # default maximum derivative (slew-rate)
 
-MIN_DT_SAVE = 1.0e-15   # min time between saves (defines max time resolution)
+MIN_DT_SAVE = 1.0e-9   # min time between saves (defines max time resolution)
 
 PI_4 = float(pi / 4.0)
 PI_3 = float(pi / 3.0)
@@ -129,7 +131,7 @@ simtime = 0.0
 simlock = th.Lock()
 
 
-# ========================== Utility Funrctions ================================
+# ========================== Utility Functions ================================
 
 
 def print_matrix_dots(m):
@@ -210,7 +212,7 @@ class Atom(object):
         self.du = 0.0
 
         self.triggered = False
-        self.saveclock = 0.0
+        self.savetime = 0.0
 
         # results data storage:
 
@@ -288,9 +290,7 @@ class Atom(object):
         self.tlast = t0
         self.tlastq = t0
         self.tnext = _INF
-
-        self.saveclock = 0.0
-        self.savetime = 0.0
+        self.savetime = t0
 
         # init state:
 
@@ -315,55 +315,7 @@ class Atom(object):
 
         # init output:
 
-        if self.sys.storage_type == StorageType.LIST:
-
-            self.tout = []
-            self.qout = []
-            self.nupd = []
-            self.tzoh = []
-            self.qzoh = []
-
-            self.tout_ss = []
-            self.xout_ss = []
-            self.nupd_ss = []
-
-            self.tode = []
-            self.xode = []
-            self.uode = []
-
-        elif self.sys.storage_type == StorageType.ARRAY:
-
-            typecode = "d"
-
-            self.tout = array(typecode)
-            self.qout = array(typecode)
-            self.nupd = array(typecode)
-            self.tzoh = array(typecode)
-            self.qzoh = array(typecode)
-
-            self.tout_ss = array(typecode)
-            self.xout_ss = array(typecode)
-            self.nupd_ss = array(typecode)
-
-            self.tode = array(typecode)
-            self.xode = array(typecode)
-            self.uode = array(typecode)
-
-        elif self.sys.storage_type == StorageType.DEQUE:
-
-            self.tout = deque()
-            self.qout = deque()
-            self.nupd = deque()
-            self.tzoh = deque()
-            self.qzoh = deque()
-
-            self.tout_ss = deque()
-            self.xout_ss = deque()
-            self.nupd_ss = deque()
-
-            self.tode = deque()
-            self.xode = deque()
-            self.uode = deque()
+        self.clear_data_arrays()
 
         self.updates = 0
         self.evals = 0
@@ -394,6 +346,68 @@ class Atom(object):
             with open(self.csv, "w") as f:
                 f.write("t,q,e,n\n")
                 f.write("{},{},{}\n".format(self.tlast, self.qlast, 0, 0))
+
+    def state_to_dict(self):
+
+        state = {}
+
+        state["tlast"]      = self.tlast
+        state["tlastq"]     = self.tlastq
+        state["tnext"]      = self.tnext
+        state["savetime"]   = self.savetime
+        state["x0"]         = self.x0
+        state["x"]          = self.x
+        state["xlast"]      = self.xlast
+        state["dx"]         = self.dx
+        state["dxlast"]     = self.dxlast
+        state["ddx"]        = self.ddx
+        state["ddxlast"]    = self.ddxlast
+        state["q"]          = self.q
+        state["qlast"]      = self.qlast
+        state["qd"]         = self.qd
+        state["dq0"]        = self.dq0
+        state["dq"]         = self.dq
+        state["qdlast"]     = self.qdlast
+        state["a"]          = self.a
+        state["u"]          = self.u
+        state["du"]         = self.du
+        state["qsave"]      = self.qsave
+        state["xsave"]      = self.xsave
+        state["qhi"]        = self.qhi
+        state["qlo"]        = self.qlo
+        state["qdhi"]       = self.qdhi
+        state["qdlo"]       = self.qdlo
+
+        return state
+
+    def state_from_dict(self, state):
+
+        self.tlast    = state["tlast"]      
+        self.tlastq   = state["tlastq"]     
+        self.tnext    = state["tnext"]      
+        self.savetime = state["savetime"]   
+        self.x0       = state["x0"]         
+        self.x        = state["x"]          
+        self.xlast    = state["xlast"]      
+        self.dx       = state["dx"]         
+        self.dxlast   = state["dxlast"]     
+        self.ddx      = state["ddx"]        
+        self.ddxlast  = state["ddxlast"]    
+        self.q        = state["q"]          
+        self.qlast    = state["qlast"]      
+        self.qd       = state["qd"]         
+        self.dq0      = state["dq0"]        
+        self.dq       = state["dq"]         
+        self.qdlast   = state["qdlast"]     
+        self.a        = state["a"]          
+        self.u        = state["u"]          
+        self.du       = state["du"]         
+        self.qsave    = state["qsave"]      
+        self.xsave    = state["xsave"]      
+        self.qhi      = state["qhi"]        
+        self.qlo      = state["qlo"]        
+        self.qdhi     = state["qdhi"]       
+        self.qdlo     = state["qdlo"]       
 
     def step(self, t):
 
@@ -451,9 +465,96 @@ class Atom(object):
         self.qlo = self.q - self.dq
         self.qhi = self.q + self.dq
 
+    def clear_data_arrays(self):
+
+        if self.sys.storage_type == StorageType.LIST:
+
+            self.tout = []
+            self.qout = []
+            self.nupd = []
+            self.tzoh = []
+            self.qzoh = []
+
+            self.tout_ss = []
+            self.xout_ss = []
+            self.nupd_ss = []
+
+            self.tode = []
+            self.xode = []
+            self.uode = []
+
+        elif self.sys.storage_type == StorageType.ARRAY:
+
+            typecode = "d"
+
+            self.tout = array(typecode)
+            self.qout = array(typecode)
+            self.nupd = array(typecode)
+
+            if len(self.tzoh > 0):
+                tzoh_last = self.tzoh[-1]
+                self.tzoh = array(typecode)
+                self.tzoj.append(tzoh_last)
+            else:
+                self.tzoh = array(typecode)
+
+            if len(self.qzoh > 0):
+                qzoh_last = self.qzoh[-1]
+                self.qzoh = array(typecode)
+                self.qzoh.append(qzoh_last)
+            else:
+                self.qzoh = array(typecode)
+
+            self.tout_ss = array(typecode)
+            self.xout_ss = array(typecode)
+            self.nupd_ss = array(typecode)
+
+            self.tode = array(typecode)
+            self.xode = array(typecode)
+            self.uode = array(typecode)
+
+        elif self.sys.storage_type == StorageType.DEQUE:
+
+            self.tout = deque()
+            self.qout = deque()
+            self.nupd = deque()
+            
+            if self.tzoh:
+                if len(self.tzoh) > 0:
+                    tzoh_last = self.tzoh[-1]
+                    self.tzoh = deque()
+                    self.tzoh.append(tzoh_last)
+                else:
+                    self.tzoh = deque()
+            else:
+                self.tzoh = deque()
+
+            if self.qzoh:
+                if len(self.qzoh) > 0:
+                    qzoh_last = self.qzoh[-1]
+                    self.qzoh = deque()
+                    self.qzoh.append(qzoh_last)
+                else:
+                    self.qzoh = deque()
+            else:
+                self.qzoh = deque()
+
+            self.tout_ss = deque()
+            self.xout_ss = deque()
+            self.nupd_ss = deque()
+
+            self.tode = deque()
+            self.xode = deque()
+            self.uode = deque()
+
     def save_qss(self, t, force=False):
 
         self.updates += 1
+
+        if t < self.savetime:
+            return
+        else:
+            self.savetime = t + MIN_DT_SAVE
 
         if self.q != self.qlast or force:
 
@@ -461,8 +562,12 @@ class Atom(object):
             self.qout.append(self.q)
             self.nupd.append(self.updates)
 
-            self.tzoh.append(t)
-            self.qzoh.append(self.qzoh[-1])
+            try:
+               self.qzoh.append(self.qzoh[-1])
+               self.tzoh.append(t)
+            except:
+                pass
+
             self.tzoh.append(t)
             self.qzoh.append(self.q)
 
@@ -1036,7 +1141,6 @@ class StateAtom(Atom):
 
             return 0.0
 
-
         h1 = -(self.a * self.x + self.u - self.dx + self.a * self.dq) / den
 
         h2 = -(self.a * self.x + self.u - self.dx - self.a * self.dq) / den
@@ -1272,6 +1376,43 @@ class System(object):
             atom.qsave = atom.q
             atom.xsave = atom.x
 
+    def clear_data_arrays(self):
+
+        for atom in self.atoms:
+            atom.clear_data_arrays()
+
+    def state_to_file(self, path):
+
+        state = {}
+
+        state["time"] = self.time
+        state["tsave"] = self.tsave
+        state["state_atoms"] = {}
+        state["source_atoms"] = {}
+
+        for atom in self.state_atoms:
+            state["state_atoms"][atom.index] = atom.state_to_dict()
+
+        for atom in self.source_atoms:
+            state["source_atoms"][atom.index] = atom.state_to_dict()
+
+        with open(path, "wb") as f:
+            pickle.dump(state, f)
+
+    def state_from_file(self, path):
+
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+
+        self.time = state["time"] 
+        self.tsave = state["tsave"]
+
+        for atom in self.state_atoms:
+            atom.state_from_dict(state["state_atoms"][atom.index])
+
+        for atom in self.source_atoms:
+            atom.state_from_dict(state["source_atoms"][atom.index])
+
     def connect(self, from_port, to_port):
 
         from_port.connect(to_port)
@@ -1386,6 +1527,11 @@ class System(object):
         for atom in self.source_atoms:
             atom.initialize(self.time)
 
+    def clear_data_arrays(self):
+
+        for atom in self.atoms:
+            atom.clear_data_arrays()
+
     def print_time(self):
 
         while self.show_time:
@@ -1423,13 +1569,15 @@ class System(object):
 
         self.ode_method = ode_method
 
+        # add the 'tstop' or end of simulation event to the list:
+
+        self.events[self.tstop] = None  # no function to call at tstop event
+
+        ran_events = []
+
         # get the event times and event function lists, sorted by time:
 
         sorted_events = sorted(self.events.items())
-
-        # add the last event (tstop, or end of simulation) to the lists:
-
-        sorted_events.append((tstop, None))
 
         # loop through the event times and solve:
 
@@ -1509,7 +1657,19 @@ class System(object):
                 for event in events:
                     event(self)
 
+                ran_events.append(event_time)
+
             self.time = event_time
+
+            if self.time >= self.tstop:
+                break  # (do not go to any more event, tstop has been reached)
+
+        # remove run events:
+
+        for eventtime in ran_events:
+            del self.events[eventtime]
+
+        del self.events[self.tstop]
 
         #self.show_time = False
         #self.print_thread.join()
@@ -1660,7 +1820,7 @@ class System(object):
             atom.tlast = t
             atom.save_qss(t, force=True)
 
-        self.time = self.tstop
+        self.time = self.tstop           
 
     def run_liqss1(self, tnext):
 
@@ -1677,7 +1837,7 @@ class System(object):
             atom.tlast = t
             atom.save_qss(t)
 
-        while(t < tnext):                           # 1
+        while(t < tnext and t < self.tstop):        # 1
 
             if self.verbose == 2: print(t)
 
@@ -2042,6 +2202,22 @@ class System(object):
 
         self.restore_state()
 
+    def print_natural_frequencies(self):
+
+        eigvals, eigvecs = eig(self.get_jacobian())
+
+        for eigval in eigvals:
+            print(f"{csqrt(eigval).real/(2*pi):10.6f} Hz")
+
+        for eigvec in eigvecs:
+            print(eigvec)
+
+    def print_states(self):
+
+        for atom in self.atoms:
+            print(atom.x)
+        print()
+
     def update_steadystate_distance(self):
 
        dq0 = [0.0]*self.n
@@ -2127,8 +2303,8 @@ class System(object):
 
         for atom in self.state_atoms:
 
-            #atom.dq = min(atom.dq0, dq1[atom.index, 0], dq2[atom.index, 0])
-            atom.dq = min(dq1[atom.index, 0], dq2[atom.index, 0]) * 0.5
+            atom.dq = min(atom.dq0, dq1[atom.index, 0], dq2[atom.index, 0])
+            #atom.dq = min(dq1[atom.index, 0], dq2[atom.index, 0]) * 0.5
 
             atom.qhi = atom.q + atom.dq
             atom.qlo = atom.q - atom.dq

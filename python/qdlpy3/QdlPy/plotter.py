@@ -9,6 +9,8 @@ import numpy as np
 from scipy.stats import gaussian_kde  # kernel-density estimate
 from scipy.interpolate import interp1d
 
+from scipy.fft import fft, fftfreq
+
 from mpl_toolkits import mplot3d
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -125,7 +127,7 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
 
     updater = MarkerUpdater()
 
-    for i, (atom, units, color) in enumerate(atoms):
+    for i, (atom, label, color) in enumerate(atoms):
 
         if subplot:
 
@@ -151,9 +153,9 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         topth = os.path.join(dir_, devicename + "_" + atomname + "_tode.pickle")
         xopth = os.path.join(dir_, devicename + "_" + atomname + "_xode.pickle")
 
-        #upth = os.path.join(dir_, devicename + "_" + atomname + "_nupd.pickle")
-        #tzpth = os.path.join(dir_, devicename + "_" + atomname + "_tzoh.pickle")
-        #qzpth = os.path.join(dir_, devicename + "_" + atomname + "_qzoh.pickle")
+        upth = os.path.join(dir_, devicename + "_" + atomname + "_nupd.pickle")
+        tzpth = os.path.join(dir_, devicename + "_" + atomname + "_tzoh.pickle")
+        qzpth = os.path.join(dir_, devicename + "_" + atomname + "_qzoh.pickle")
 
         with open(tpth, "rb") as f: tout = pickle.load(f)
         with open(qpth, "rb") as f: qout = pickle.load(f)
@@ -166,15 +168,8 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         #with open(tzpth, "rb") as f: tzoh = pickle.load(f)
         #with open(qzpth, "rb") as f: qzoh = pickle.load(f)
 
-        tzoh = []
-        qzoh = []
-
-        for i in range(len(tout)-1):
-                
-            tzoh.append(tout[i])
-            tzoh.append(tout[i])
-            qzoh.append(qout[i])
-            qzoh.append(qout[i+1])
+        #tzoh = np.zeros((len(tout)*2,))
+        #qzoh = np.zeros((len(tout)*2,))
 
         upds = list(range(len(tout)))
 
@@ -187,44 +182,36 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
             if update_rate:
                 lblu = f"Update Rate (Hz)"
             else:
-                lblu = f"Update"
+                lblu = f"Updates"
 
         else:
 
-            if units:
-                lbl = f"{atom} ({units})"
-                lblo = f"{atom} ({units}) (ODE-Radau)"
-                lblz = f"{atom} ({units}) (QSS-LIQSS1)"
-
-            else:
-                lbl = f"{atom}"
-                lblo = f"{atom} (ODE-Radau)"
-                lblz = f"{atom} (QSS-LIQSS1)"
+            lbl = f"{label}"
+            lblo = f"{label} (ODE-Radau)"
+            lblz = f"{label} (QSS-LIQSS1)"
 
             if update_rate:
                 lblu = f"{atom} Update Rate (Hz)"
             else:
                 lblu = f"{atom} Updates"
 
-        interp1d
+        ax1.plot(tout, qout,
+                 alpha=1.0,
+                 linestyle='-',
+                 color=color,
+                 linewidth=0.5,
+                 label=lblz)
 
         if ode:
 
             ax1.plot(tode, xode,
                      alpha=1.0,
                      linestyle='--',
-                     color='grey',
-                     linewidth=1.5,
+                     color='black',
+                     linewidth=1.0,
                      label=lblo)
 
-        ax1.plot(tzoh, qzoh,
-                 alpha=1.0,
-                 linestyle='-',
-                 color=color,
-                 linewidth=1.5,
-                 label=lblz)
-
-        if update_rate: 
+        if update_rate:
 
             rate = np.gradient(upds, tout)
 
@@ -235,29 +222,15 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
                      alpha=1.0,
                      linestyle='dotted',
                      color=color,
-                     linewidth=1.5,
+                     linewidth=2.0,
                      label=lblu)
         else:
             ax2.plot(tout, upds,
                      alpha=1.0,
                      linestyle='dotted',
                      color=color,
-                     linewidth=1.5,
+                     linewidth=2.0,
                      label=lblu)
-
-        """
-        ax1.plot(tout, qout,
-                 marker='.',
-                 markersize=3,
-                 markerfacecolor='k',
-                 markeredgecolor='k',
-                 markeredgewidth=0.5,
-                 linestyle='none',
-                 alpha=0.1,
-                 label=lbl)
-
-        updater.add_ax(ax1, ['size', 'alpha'])
-        """
 
         if subplot:
 
@@ -274,7 +247,7 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
             else:
                 ax1.legend(lines1, labels1, loc=loc)
 
-            ax1.set_ylabel(f"{atom} ({units})")
+            ax1.set_ylabel(f"{label}")
 
     if not subplot:
 
@@ -292,23 +265,29 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         else:
             ax1.legend(lines1, labels1, loc=loc)
 
-    
+
     plt.xlabel("t (s)")
 
     plt.show()
 
 
-def plot_updates(dir_, atoms, upd_bins=50):
+def plot_updates(dir_, atoms, upd_bins=50, labels=None, cumm=False, title="", log=False, refdt=None):
 
     touts = []
+    nupds = []
 
     for atom in atoms:
 
         devicename, atomname = atom.split(".")
 
         pth = os.path.join(dir_, devicename + "_" + atomname + "_tout.pickle")
-
         with open(pth, "rb") as f: touts.append(pickle.load(f))
+
+        try:
+            pth = os.path.join(dir_, devicename + "_" + atomname + "_nupd.pickle")
+            with open(pth, "rb") as f: nupds.append(pickle.load(f))
+        except:
+            pass
 
     fig = plt.figure()
 
@@ -316,9 +295,47 @@ def plot_updates(dir_, atoms, upd_bins=50):
 
     lbl = f"{atom}, updates"
 
+    if cumm and refdt:
+
+        t0, tf = touts[0][0], touts[0][-1]
+
+        t = np.arange(t0, tf, tf/1000.0)
+
+        y = [p/refdt for p in t]
+
+        if log:
+            plt.semilogy(t, y, color='tab:gray', linestyle='--', label="ODE time steps")
+        else:
+            plt.plot(t, y, 'k--', label="ODE time steps")
+
     for i, atom in enumerate(atoms):
 
-        if 1:
+        if labels:
+            label = labels[i]
+        else:
+            label = atom
+
+        if cumm:
+
+            if nupds:
+
+                nupd = nupds[i]
+
+            else:
+
+                nupd = [0]
+
+                for j, t in enumerate(touts[i]):
+                    nupd.append(1 + nupd[j])
+
+            if log:
+                plt.semilogy(touts[i], nupd[:-1], label=label)
+            else:
+                plt.plot(touts[i], nupd[:-1], label=label)
+
+            ax.set_ylabel("Cummulative Atom Updates")
+
+        else:
 
             nbins = 100
 
@@ -336,44 +353,27 @@ def plot_updates(dir_, atoms, upd_bins=50):
             yzoh = []
 
             for i in range(nbins-1):
-                
+
                 xzoh.append(bins[i])
                 xzoh.append(bins[i])
                 yzoh.append(hist[i] * factor)
                 yzoh.append(hist[i+1] * factor)
 
-            plt.semilogy(xzoh, yzoh, label=atom)
+            if log:
+                plt.semilogy(xzoh, yzoh, label=label)
+            else:
+                plt.plot(xzoh, yzoh, label=label)
 
             ax.set_ylim(1e0, 1e7)
 
             ax.set_xlim(1.0, tout[-1])
 
-        if 0:
-
-            upd_bins = 100
-
-            istart = 2
-            iend = len(touts[i])
-
-            tout = collections.deque(itertools.islice(touts[i], istart, iend))
-
-            dt = tout[-1] / upd_bins
-
-            n = len(tout)
-            bw = n**(-2/3)
-            kde = gaussian_kde(tout, bw_method=bw)
-            t = np.arange(tout[0], tout[-1], dt/10)
-            pdensity = kde(t) * n
-
-            plt.semilogy(t, pdensity, label=atom)
-            
-            ax.set_ylim(1e0, 1e7)
-
-            ax.set_xlim(1.0, tout[-1])
+            ax.set_ylabel("Update Frequency (Hz)")
 
     ax.set_xlabel("t (s)")
 
-    ax.set_ylabel("Update Frequency (Hz)")
+    if title:
+        plt.title(title)
 
     plt.grid()
 
@@ -382,85 +382,112 @@ def plot_updates(dir_, atoms, upd_bins=50):
     plt.show()
 
 
-"""
-if __name__ == '__main__':
+def plot_fft(dir_, atoms, tspan, dt=1e-4):
 
-    my_updater = MarkerUpdater()
+    tstart, tstop = tspan
 
-    ##setting up the figure
-    fig, axes = plt.subplots(nrows = 2, ncols =2)#, figsize=(1,1))
-    ax1,ax2,ax3,ax4 = axes.flatten()
+    for i, atom in enumerate(atoms):
 
-    ## a line plot
-    x1 = np.linspace(0,np.pi,30)
-    y1 = np.sin(x1)
-    ax1.plot(x1, y1, 'ro', markersize = 10, alpha = 0.8)
-    ax3.plot(x1, y1, 'ro', markersize = 10, alpha = 1)
+        devicename, atomname = atom.split(".")
 
-    ## a scatter plot
-    x2 = np.random.normal(1,1,30)
-    y2 = np.random.normal(1,1,30)
-    ax2.scatter(x2,y2, c = 'b', s = 100, alpha = 0.6)
+        tpth = os.path.join(dir_, devicename + "_" + atomname + "_tout.pickle")
+        qpth = os.path.join(dir_, devicename + "_" + atomname + "_qout.pickle")
 
-    ## scatter and line plot
-    ax4.scatter(x2,y2, c = 'b', s = 100, alpha = 0.6)
-    ax4.plot([0,0.5,1],[0,0.5,1],'ro', markersize = 10) ##note: no alpha value!
+        with open(tpth, "rb") as f: tout = pickle.load(f)
+        with open(qpth, "rb") as f: qout = pickle.load(f)
 
-    ##setting up the updater
-    my_updater.add_ax(ax1, ['size'])  ##line plot, only marker size
-    my_updater.add_ax(ax2, ['size'])  ##scatter plot, only marker size
-    my_updater.add_ax(ax3, ['alpha']) ##line plot, only alpha
-    my_updater.add_ax(ax4, ['size', 'alpha']) ##scatter plot, marker size and alpha
+        n = int((tstop - tstart) / dt)
 
-    plt.show()
+        print(n)
+                
+        f = interp1d(tout, qout)
+        
+        tnew = np.linspace(tstart, tstop, num=n)
+        
+        T = dt
+        yf = fft(f(tnew))
+        xf = fftfreq(n, T)[:n//2]
 
-"""
-
-dir_ = r"D:\School\qdl\LOAD_INCREASE\5s"
-
-if 0:
-
-    dir_ = r"D:\School\qdl\LOAD_INCREASE\5s"
-
-    atoms = [
-    ("sm.wr", "rad/s", "tab:red"),
-    ("load.id", "A", "tab:blue"),
-    ]
-
-    plot_qss(dir_, atoms, loc="lower right", ylabel="(V)",
-             update_rate=True, subplot=True, ode=True)
-
-if 1:
-
-    dir_ = r"D:\School\qdl\LOAD_INCREASE\30s"
-
-    atoms = [
-    ("sm.wr", "rad/s", "tab:red"),
-    ("load.id", "A", "tab:blue"),
-    ("im.wr", "rad/s", "tab:green"),
-    ]
-
-    plot_qss(dir_, atoms, loc="lower right", ylabel="(V)",
-             update_rate=False, subplot=True, ode=False)
-
-if 0:
-
-    dir_ = r"D:\School\qdl\VREF_INCREASE\30s"
-
-    atoms = [
-    ("avr.x1", "V", "tab:green"),
-    ("sm.wr", "rad/s", "tab:red"),
-    ("load.id", "A", "tab:blue"),
-    ]
-
-    plot_qss(dir_, atoms, loc="lower right", ylabel="(V)",
-             update_rate=False, subplot=True, ode=False)
-
-if 0:
-
-    dir_ = r"D:\School\qdl\LOAD_INCREASE\30s"
-
-    plot_updates(dir_, ["sm.wr", "sm.th", "cable12.id", "bus1.vd", "load.id"])
+        plt.plot(xf[1:n], 2.0/n * np.abs(yf[1:n//2]))
+        plt.grid()
+        plt.show()
 
 
+def freq_analysis():
 
+    dir_ = r"D:\School\qdl\VREF_INCREASE\60s"
+
+    plot_fft(dir_, ["sm.ids", "bus1.vd"], [20.0, 60.0])
+
+
+def paper2_plots():
+
+    dir_ = r"D:\School\qdl\VREF_INCREASE\60s"
+
+    ode = True
+
+    if 0:
+        atoms = [
+        ("avr.x1", "$x_1$ (V)", "tab:green"),
+        ("avr.x2", "$x_2$ (V)", "tab:red"),
+        ("avr.x3", "$x_3$ (V)", "tab:blue"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=ode)
+        
+    if 0:  
+        atoms = [
+        ("im.wr", "$\omega_r$ (rad/s)", "tab:green"),
+        ("im.ids", "$I_{ds}$ (A)", "tab:red"),
+        ("bus2.vd", "$V_{ds}$ (V)", "tab:blue"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=ode)
+    if 0:
+        atoms = [
+        ("sm.wr", "$\omega_{r}$ (rad/s)", "tab:green"),
+        ("sm.th", r"$\theta_{r}$ (rad)", "tab:red"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=ode)
+    if 0:
+        atoms = [
+        ("sm.iqs", "$I_{qs}$ (A)", "tab:green"),
+        ("bus1.vd", "$V_{ds}$ (V)", "tab:red"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=ode)
+    if 0:
+        atoms = [
+        ("trload.id", "$I_{d}$ (A)", "tab:green"),
+        ("trload.vdc", "$V_{dc}$ (V)", "tab:red"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=ode)
+    if 0:
+        atoms = [
+        ("load.id", "$I_{d}$ (A)", "tab:green"),
+        ("load.iq", "$I_{q}$ (V)", "tab:red"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=ode)
+
+    if 1:
+        plot_updates(dir_, ["im.wr", "im.ids", "bus2.vd"],
+                 labels=[r"$\omega_r$", "$I_{ds}$", "$V_{ds}$"],
+                 #title="Induction Machine Atom Updates",
+                 cumm=True, log=True, refdt=1e-5)
+    if 0:
+        plot_updates(dir_, ["sm.wr", "sm.th", "sm.ids", "bus1.vd"],
+                 labels=[r"$\omega_r$", r"$\theta$", "$I_{ds}$", "$V_{ds}$"],
+                 #title="Synchronous Machine Atom Updates",
+                 cumm=True, log=True, refdt=1e-5)
+#paper2_plots()
+
+freq_analysis()

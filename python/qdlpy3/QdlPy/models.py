@@ -1224,7 +1224,6 @@ class Converter(Device):
 class InductionMachineDQ(Device):
 
     """
-
     fqs = Lls * iqs + Lm * (iqs + iqr)
     fds = Lls * ids + Lm * (ids + idr)
     fqr = Llr * iqr + Lm * (iqr + iqs)
@@ -1234,7 +1233,6 @@ class InductionMachineDQ(Device):
     vds = Rs * ids - wr * fqs + (Lls + Lm) * dids + Lm * didr
     vqr = Rr * iqr + (ws - wr) * fdr + (Llr + Lm) * diqr + Lm * diqs
     vdr = Rr * idr - (ws - wr) * fqr + (Llr + Lm) * didr + Lm * dids
-
     """
 
     def __init__(self, name, ws=30*PI, P=4, Tb=26.53e3, Rs=31.8e-3,
@@ -1760,7 +1758,7 @@ class TRLoadDQ2(Device):
 
     edc = Sd*vd + Sq*vq
 
-    edc - vdc = idc*Rdc + didc*Ldc
+    vg - vdc = idc*Rdc + didc*Ldc
 
     didc*Ldc = (edc - vdc - idc*Rdc) / Ldc
 
@@ -1768,7 +1766,8 @@ class TRLoadDQ2(Device):
 
     did = (pi/(3*sqrt(2)*cos(phi))) * didc
     diq = (-pi/(3*sqrt(2)*sin(phi))) * didc
-    dedc =
+
+    dvg = (self.id.q / self.S - vdc / self.R) / self.C)
 
     """
 
@@ -2247,6 +2246,9 @@ class CoupledPendulums(Device):
     @staticmethod
     def jth2_w2(self, th2, w2):
         return 1.0
+
+
+# =========================== SYMBOLIC DEVICES =================================
 
 
 class Pendulum2(SymbolicDevice):
