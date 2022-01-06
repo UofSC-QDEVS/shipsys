@@ -20,6 +20,7 @@ class StateSpace(object):
         self.m = self.b.shape[1]
         self.dt = -1.0
         self.time = 0.0
+        self.eye = np.eye(self.n)
 
     def initialize(self, dt, u0=None, reset_state=True):
 
@@ -53,8 +54,6 @@ class StateSpace(object):
             self.u = self.u0
         else:
             self.u = np.zeros((self.m, 1))
-
-        eye = np.eye(self.n)
 
         self.apr = la.inv(eye - dt * self.a)
         self.bpr = np.dot(self.apr, dt * self.b)
