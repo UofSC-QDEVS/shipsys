@@ -133,3 +133,7 @@ dmypy.json
 
 # Python pickle data:
 *.pickle
+
+python/qdlpy3/QdlPy/.vs/QdlPy/v15/
+
+python/qdlpy2/.vs/qdlpy2/v15/

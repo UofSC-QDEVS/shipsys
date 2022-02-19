@@ -25,6 +25,7 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="converters.py" />
     <Compile Include="funcss.py">
       <SubType>Code</SubType>
     </Compile>
@@ -36,9 +37,22 @@
     </Compile>
     <Compile Include="plot_data.py" />
     <Compile Include="plot_error.py" />
+    <Compile Include="ode.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="plotter.py" />
     <Compile Include="qss.py" />
     <Compile Include="qdl.py" />
     <Compile Include="lti.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="shipsys_mp.py" />
+    <Compile Include="simple.py" />
+    <Compile Include="test_mliqss.py" />
+    <Compile Include="udltest.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="scratch.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="tests.py">
@@ -46,9 +60,15 @@
     </Compile>
   </ItemGroup>
   <ItemGroup>
+    <InterpreterReference Include="Global|ContinuumAnalytics|Anaconda27-32" />
     <InterpreterReference Include="Global|PythonCore|3.7" />
     <InterpreterReference Include="Global|PythonCore|3.8" />
     <InterpreterReference Include="Global|PythonCore|3.9" />
+    <InterpreterReference Include="Global|VisualStudio|Python37x64_d" />
+    <InterpreterReference Include="Global|VisualStudio|Python37_d" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="sm.json" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

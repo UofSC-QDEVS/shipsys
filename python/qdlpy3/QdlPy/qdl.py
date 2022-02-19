@@ -1,23 +1,69 @@
 """Quantized DEVS-LIM modeling and simulation framework.
 """
 
-from math import pi, sin, cos, sqrt, floor
+_SYMPY = False
+
+import os
+
+if _SYMPY:
+    import sympy as sp
+    from sympy.solvers import solve
+    from sympy.utilities.lambdify import lambdify, implemented_function
+    from sympy import sin, cos, tan, atan2, acos, pi, sqrt
+
+from glob import glob
+import time
+import pickle
+
+import threading as th
+import queue
+
+# numerical math constants:
+
+from math import pi    as PI
+from math import sin   as SIN
+from math import cos   as COS
+from math import acos  as ACOS
+from math import tan   as TAN
+from math import acos  as ACOS
+from math import atan2 as ATAN2
+from math import sqrt  as SQRT
+from math import floor as FLOOR
+from math import ceil  as CEIL
+from math import isclose as ISCLOSE
+
+# temporary:
+
+from math import pi, sin, cos, acos, tan, acos, atan2, sqrt, floor as FLOOR
+from cmath import sqrt as csqrt
+
+from collections import deque
 from collections import OrderedDict as odict
+from array import array
+
+import pandas as pd
 
 import numpy as np
 import numpy.linalg as la
 
+from mpl_toolkits import mplot3d
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+mpl.rc('axes.formatter', useoffset=False)
+
+from scipy.integrate import solve_ivp
+from scipy.optimize import fsolve
+from scipy.interpolate import interp1d
+from scipy.stats import gaussian_kde
+from scipy.linalg import eig, eigh
 
 import lti
-import funcss
 
 
 # ============================ Private Constants ===============================
 
 
-_EPS = 1.0e-9
+_EPS = 1.0e-12
 _INF = float('inf')
 _MAXITER = 1000
 
@@ -25,15 +71,25 @@ _MAXITER = 1000
 # ============================ Public Constants ================================
 
 
-DEF_DQ = 1.0e-6        # default delta Q
-DEF_DQMIN = 1.0e-6     # default minimum delta Q (for dynamic dq mode)
-DEF_DQMAX = 1.0e-6     # default maximum delta Q (for dynamic dq mode)
-DEF_DQERR = 1.0e-2     # default delta Q absolute error (for dynamic dq mode)
-DEF_DTMIN = 1.0e-12    # default minimum time step
+DEF_DTMIN = 1e-12      # default minimum time step
 DEF_DMAX = 1.0e5       # default maximum derivative (slew-rate)
+
+MIN_DT_SAVE = 1.0e-9   # min time between saves (defines max time resolution)
+
+PI_4 = float(pi / 4.0)
+PI_3 = float(pi / 3.0)
+PI5_6 = float(5.0 * pi / 6.0)
+PI7_6 = float(7.0 * pi / 6.0)
 
 
 # ============================= Enumerations ===================================
+
+
+class StorageType:
+
+    LIST = "LIST"
+    ARRAY = "ARRAY"
+    DEQUE = "DEQUE"
 
 
 class SourceType:
@@ -47,21 +103,47 @@ class SourceType:
     FUNCTION = "FUNCTION"
 
 
-class LimAtomType:
+class OdeMethod:
 
-    NONE = "NONE"
-    LATENCY_NODE = "LATENCY_NODE"
-    LATENCY_BRANCH = "LATENCY_BRANCH"
-    GROUND_NODE = "GROUND_NODE"
-    CONST_NODE = "CONST_NODE"
-    CONST_BRANCH = "CONST_BRANCH"
+    RK45 = "RK45"
+    RK23 = "RK23"
+    DOP853 = "DOP853"
+    RADAU = "Radau"
+    BDF = "BDF"
+    LSODA = "LSODA"
 
 
-class PortDirection(object):
+class QssMethod:
 
-    IN = "IN"
-    OUT = "OUT"
-    INOUT = "INOUT"
+    QSS1 = "QSS1"
+    QSS2 = "QSS2"
+    LIQSS1 = "LIQSS1"
+    LIQSS2 = "LIQSS2"
+    mLIQSS1 = "mLIQSS1"
+    mLIQSS2 = "mLIQSS2"
+
+
+# =============================== Globals ======================================
+
+
+sys = None  # set by qdl.System constructor for visibility from fode function.
+simtime = 0.0
+simlock = th.Lock()
+
+
+# ========================== Utility Functions ================================
+
+
+def print_matrix_dots(m):
+    s = ""
+    for i in m.size(0):
+        for j in m.size(1):
+            if m[i,j]:
+                s += "x"
+            else:
+                s += " "
+        s += "\n"
+    print(s)
 
 
 # ============================= Qdl Model ======================================
@@ -69,378 +151,296 @@ class PortDirection(object):
 
 class Atom(object):
 
-    """ Qdl Atom.
-    """
-
-    def __init__(self, name, is_latent=True, a=0.0, b=0.0, c=0.0,
-                 source_type=SourceType.NONE, lim_type=LimAtomType.NONE,
-                 x0=0.0, x1=0.0, x2=0.0, xa=0.0, freq=0.0, phi=0.0, duty=0.0,
-                 t1=0.0, t2=0.0, derivative=None, dq=None, dqmin=None,
-                 dqmax=None, dqerr=None, dtmin=None, dmax=1e5, units="",
-                 srcfunc=None, fixed_dt=None, output_scale=1.0):
+    def __init__(self, name, x0=0.0, dq=None, dqmin=None, dqmax=None,
+                 dqerr=None, dtmin=None, dmax=1e10, units="", qss_method=None):
 
         # params:
 
         self.name = name
-        self.is_latent = is_latent
-        self.a = a
-        self.b = b
-        self.c = c
-        self.source_type = source_type
-        self.lim_type = lim_type
-        self.x0 = x0
-        self.x1 = x1 
-        self.x2 = x2
-        self.xa = xa
-        self.freq = freq
-        self.phi = phi
-        self.duty = duty
-        self.t1 = t1
-        self.t2 = t2
-        self.derivative = derivative
-        self.dq = dq
+        self.x0 = x0  # initial value of state
+        self.dq = dq  # quantization step size
+
         self.dqmin = dqmin
         self.dqmax = dqmax
         self.dqerr = dqerr
+
         self.dtmin = dtmin
+
         self.dmax = dmax
+
         self.units = units
-        self.srcfunc = srcfunc
-        self.fixed_dt = fixed_dt
-        self.output_scale = output_scale
+
+        self.qss_method = qss_method  # type QssMethod
 
         # simulation variables:
 
-        self.qlo = 0.0   
-        self.qhi = 0.0    
-        self.tlast = 0.0  
-        self.tnext = 0.0  
-        self.x = x0    
-        self.d = 0.0      
-        self.d0 = 0.0     
-        self.q = x0      
-        self.q0 = x0     
+        # quantization step:
+
+        self.dq0 = self.dq
+        self.qlo = 0.0
+        self.qhi = 0.0
+        self.qdlo = 0.0
+        self.qdhi = 0.0
+
+        # time:
+
+        self.tlast = 0.0    # last update time of internal state x
+        self.tlastq = 0.0   # last update time of quantized state q
+        self.tnext = 0.0    # next time to quantized state change
+
+        # internal state:
+
+        self.x = x0
+        self.xlast = x0
+
+        # internal state derivatives:
+
+        self.dx = 0.0
+        self.dxlast = 0.0
+        self.ddx = 0.0
+        self.ddxlast = 0.0
+
+        # quantized state:
+
+        self.q = x0
+        self.qlast = x0
+        self.qd = x0
+        self.qdlast = x0
+
+        self.a = 0.0
+        self.u = 0.0
+        self.du = 0.0
+
         self.triggered = False
+        self.savetime = 0.0
 
         # results data storage:
 
-        self.updates = 0
+        # qss:
         self.tout = None  # output times quantized output
-        self.qout = None  # quantized output 
+        self.qout = None  # quantized output
         self.tzoh = None  # zero-order hold output times quantized output
-        self.qzoh = None  # zero-order hold quantized output 
-        self.tout2 = None  # output times quantized output
-        self.qout2 = None  # quantized output 
-        self.nupd2 = None  # cummulative update count
+        self.qzoh = None  # zero-order hold quantized output
+        self.evals = 0    # qss evals
+        self.updates = 0  # qss updates
+
+        # state space:
+        self.tout_ss = None  # state space time output
+        self.xout_ss = None  # state space value output
+        self.updates_ss = 0  # state space update count
+
+        # non-linear ode:
+        self.tode = None  # state space time output
+        self.xode = None  # state space value output
+        self.updates_ode = 0  # state space update count
 
         # atom connections:
 
-        self.receive_from = {}
-        self.broadcast_to = []
+        self.broadcast_to = []  # push updates to
+        self.connections = []   # recieve updates from
+
+        # jacobian cell functions:
+
+        self.jacfuncs = []
+        self.derargfunc = None
 
         # parent object references:
 
         self.sys = None
         self.device = None
 
-        # derived:
-
-        self.ainv = 0.0
-        if self.a > 0:
-            self.ainv = 1.0 / a
-
-        self.omega = 2.0 * pi * self.freq
-
-        if self.freq:
-            self.T = 1.0 / self.freq
-
-        if self.source_type == SourceType.RAMP:
-            self.x0 = self.x1
-
-        self.ramp_slope = 0.0
-        if (self.t2 - self.t1) > 0:
-            self.ramp_slope = (self.x2 - self.x1) / (self.t2 - self.t1)
+        # other:
 
         self.implicit = True
 
-    def full_name(self):
+        self.tocsv = False
+        self.outdir = None
+        self.csv = None
 
-        return self.device.name + "." + self.name
+    def add_connection(self, other, coefficient=1.0, coeffunc=None):
 
-    def connect(self, atom, gain=1.0):
+        connection = Connection(self, other, coefficient=coefficient,
+                                coeffunc=coeffunc)
 
-        self.receive_from[atom] = gain
-        atom.broadcast_to.append(self)
+        connection.device = self.device
 
-    def connects(self, *atoms):
+        self.connections.append(connection)
 
-        for atom in atoms:
-            self.receive_from[atom] = 1.0
-            atom.broadcast_to.append(self)
+        return connection
 
-    def update_gain(self, atom, gain):
+    def add_jacfunc(self, other, func):
 
-        if atom in self.receive_from:
-            self.receive_from[atom] = gain
+        self.jacfuncs.append((other, func))
+
+    def set_state(self, value, quantize=False):
+
+        self.x = float(value)
+
+        if quantize:
+
+            self.quantize(implicit=False)
+
+        else:
+            self.q = value
+            self.qhi = self.q + self.dq
+            self.qlo = self.q - self.dq
 
     def initialize(self, t0):
 
         self.tlast = t0
-        self.time = t0
+        self.tlastq = t0
         self.tnext = _INF
+        self.savetime = t0
 
         # init state:
 
-        if self.source_type == SourceType.FUNCTION:
-
-            self.x = self.srcfunc()
-            self.q = self.x
-            self.q0 = self.x
-
-        else:
-            self.x = self.x0
-            self.q = self.x0
-            self.q0 = self.x0
+        self.x = self.x0
+        self.q = self.x
+        self.qlast = self.x
+        self.qd = 0.0
+        self.qdlast = 0.0
+        self.a = 0.0
+        self.u = 0.0
+        self.du = 0.0
+        self.qsave = self.x
+        self.xsave = self.x
 
         # init quantizer values:
 
-        self.dq = self.dqmin
         self.qhi = self.q + self.dq
         self.qlo = self.q - self.dq
 
+        self.qdhi = self.qd + self.dq
+        self.qdlo = self.qd - self.dq
+
         # init output:
 
+        self.clear_data_arrays()
+
         self.updates = 0
-        self.tout = [self.time]
-        self.qout = [self.q0]
-        self.nupd = [0]
-        self.tzoh = [self.time]
-        self.qzoh = [self.q0]
+        self.evals = 0
+        self.updates_ss = 0
+        self.updates_ode = 0
 
-    def update(self, time):
+        self.tout.append(self.tlast)
+        self.qout.append(self.qlast)
+        self.nupd.append(0)
+        self.tzoh.append(self.tlast)
+        self.qzoh.append(self.qlast)
 
-        self.time = time
+        self.tout_ss.append(self.tlast)
+        self.xout_ss.append(self.qlast)
+        self.nupd_ss.append(0)
+
+        self.tode.append(self.tlast)
+        self.xode.append(self.qlast)
+        self.uode.append(0)
+
+        self.tocsv = self.sys.tocsv
+        self.outdir = self.sys.outdir
+
+        if self.tocsv and self.outdir:
+
+            self.csv = os.path.join(self.outdir, "{}_{}.csv".format(self.device.name, self.name))
+
+            with open(self.csv, "w") as f:
+                f.write("t,q,e,n\n")
+                f.write("{},{},{}\n".format(self.tlast, self.qlast, 0, 0))
+
+    def state_to_dict(self):
+
+        state = {}
+
+        state["tlast"]      = self.tlast
+        state["tlastq"]     = self.tlastq
+        state["tnext"]      = self.tnext
+        state["savetime"]   = self.savetime
+        state["x0"]         = self.x0
+        state["x"]          = self.x
+        state["xlast"]      = self.xlast
+        state["dx"]         = self.dx
+        state["dxlast"]     = self.dxlast
+        state["ddx"]        = self.ddx
+        state["ddxlast"]    = self.ddxlast
+        state["q"]          = self.q
+        state["qlast"]      = self.qlast
+        state["qd"]         = self.qd
+        state["dq0"]        = self.dq0
+        state["dq"]         = self.dq
+        state["qdlast"]     = self.qdlast
+        state["a"]          = self.a
+        state["u"]          = self.u
+        state["du"]         = self.du
+        state["qsave"]      = self.qsave
+        state["xsave"]      = self.xsave
+        state["qhi"]        = self.qhi
+        state["qlo"]        = self.qlo
+        state["qdhi"]       = self.qdhi
+        state["qdlo"]       = self.qdlo
+
+        return state
+
+    def state_from_dict(self, state):
+
+        self.tlast    = state["tlast"]      
+        self.tlastq   = state["tlastq"]     
+        self.tnext    = state["tnext"]      
+        self.savetime = state["savetime"]   
+        self.x0       = state["x0"]         
+        self.x        = state["x"]          
+        self.xlast    = state["xlast"]      
+        self.dx       = state["dx"]         
+        self.dxlast   = state["dxlast"]     
+        self.ddx      = state["ddx"]        
+        self.ddxlast  = state["ddxlast"]    
+        self.q        = state["q"]          
+        self.qlast    = state["qlast"]      
+        self.qd       = state["qd"]         
+        self.dq0      = state["dq0"]        
+        self.dq       = state["dq"]         
+        self.qdlast   = state["qdlast"]     
+        self.a        = state["a"]          
+        self.u        = state["u"]          
+        self.du       = state["du"]         
+        self.qsave    = state["qsave"]      
+        self.xsave    = state["xsave"]      
+        self.qhi      = state["qhi"]        
+        self.qlo      = state["qlo"]        
+        self.qdhi     = state["qdhi"]       
+        self.qdlo     = state["qdlo"]       
+
+    def step(self, t):
+
+        self.tlast = t
+        self.evals += 1
         self.updates += 1
-        self.triggered = False   # reset triggered flag
-
-        self.d = self.f(self.q)
-        self.d = max(self.d, -self.dmax)
-        self.d = min(self.d, self.dmax)
-
-        self.dint()
-        self.quantize()
-        self.ta()
-
-        # trigger external update if quantized output changed:
-        
-        if self.q != self.q0:
-            self.save()
-            self.q0 = self.q
-            self.trigger()
-            self.update_dq()
-
-    def step(self, time):
-
-        self.time = time
-        self.updates += 1
-        self.d = self.f(self.x)
-        self.dint()
+        self.dx = self.f()
+        self.dint(t)
         self.q = self.x
-        self.save()
-        self.q0 = self.q
+        self.save_qss(t, force=True)
+        self.qlast = self.q
 
-    def dint(self):
+    def dint(self, t):
 
-        if self.source_type == SourceType.NONE:
-
-            self.x += self.d * (self.time - self.tlast)
-        
-        elif self.source_type == SourceType.CONSTANT:
-
-            self.x = self.x0
-
-        elif self.source_type == SourceType.STEP:
-
-            if self.time < self.t1:
-                self.x = self.x0
-            else:
-                self.x = self.x1
-
-        elif self.source_type == SourceType.SINE:
-
-            if self.time >= self.t1:
-                self.x = self.x0 + self.xa * sin(self.omega * self.time + self.phi)
-            else:
-                self.x = self.x0
-
-        elif self.source_type == SourceType.PWM:
-
-            pass # todo
-
-        elif self.source_type == SourceType.RAMP:
-
-            if self.time <= self.t1:
-                self.x = self.x1
-            elif self.time <= self.t2:
-                self.x = self.x1 + (self.time - self.t1) * self.d 
-            else:
-                self.x = self.x2
-
-        elif self.source_type == SourceType.FUNCTION:
-
-            self.x = self.srcfunc()
-
-        self.tlast = self.time
+        raise NotImplementedError()
 
     def quantize(self):
-        
-        interp = False
-        change = False
 
-        self.d0 = self.d
+        raise NotImplementedError()
 
-        if self.source_type in (SourceType.FUNCTION, SourceType.STEP, SourceType.SINE):
+    def ta(self, t):
 
-            # non-derivative based:
+        raise NotImplementedError()
 
-            self.q = self.x
+    def f(self, q, t=0.0):
 
-        elif self.source_type in (SourceType.NONE, SourceType.RAMP):
+        raise NotImplementedError()
 
-            # derivative based:
+    def df(self, q, d, t=0.0):
 
-            if self.x >= self.qhi:
+        raise NotImplementedError()
 
-                self.q = self.qhi
-                self.qlo += self.dq
-                change = True
-
-            elif self.x <= self.qlo:
-
-                self.q = self.qlo
-                self.qlo -= self.dq
-                change = True
-
-            self.qhi = self.qlo + 2.0 * self.dq
-
-            if change and self.implicit:  # we've ventured out of (qlo, qhi) bounds
-
-                self.d = self.f(self.q)
-
-                # if the derivative has changed signs, then we know 
-                # we are in a potential oscillating situation, so
-                # we will set the q such that the derivative ~= 0:
-
-                if (self.d * self.d0) < 0:  # if derivative has changed sign
-                    flo = self.f(self.qlo) 
-                    fhi = self.f(self.qhi)
-                    if flo != fhi:
-                        a = (2.0 * self.dq) / (fhi - flo)
-                        self.q = self.qhi - a * fhi
-                        interp = True
-
-        return interp
-
-    def ta(self):
-
-        if self.source_type == SourceType.NONE:
-
-            if self.d > 0.0:
-                self.tnext = self.time + (self.qhi - self.x) / self.d
-            elif self.d < 0.0:
-                self.tnext = self.time + (self.qlo - self.x) / self.d
-            else:
-                self.tnext = _INF
-        
-        elif self.source_type == SourceType.RAMP:
-
-            if self.time < self.t1:
-                self.tnext = self.t1
-
-            elif self.time < self.t2:
-                if self.d > 0.0:
-                    self.tnext = self.time + (self.q + self.dq - self.x) / self.d
-                elif self.d < 0.0:
-                    self.tnext = self.time + (self.q - self.dq - self.x) / self.d
-                else:
-                    self.tnext = _INF
-
-            else:
-                self.tnext = _INF
-
-        elif self.source_type == SourceType.STEP:
-
-            if self.time < self.t1:
-                self.tnext = self.t1
-            else:
-                self.tnext = _INF
-
-        elif self.source_type == SourceType.SINE:
-
-            if self.time < self.t1:
-
-                self.tnext = self.t1
-
-            else: 
-
-                w = self.time % self.T             # cycle time
-                t0 = self.time - w                 # cycle start time
-                theta = self.omega * w + self.phi  # wrapped angular position
-
-                # value at current time w/o dc offset:
-                x = self.xa * sin(2.0 * pi * self.freq * self.time)
-
-                # determine next transition time. Saturate at +/- xa:
-            
-                if theta < pi/2.0:  # quadrant I
-                    self.tnext = t0 + (asin(min(1.0, (x + self.dq)/self.xa))) / self.omega
-
-                elif theta < pi:  # quadrant II
-                    self.tnext = t0 + self.T/2.0 - (asin(max(0.0, (x - self.dq)/self.xa))) / self.omega
-
-                elif theta < 3.0*pi/2:  # quadrant III
-                    self.tnext = t0 + self.T/2.0 - (asin(max(-1.0, (x - self.dq)/self.xa))) / self.omega
-
-                else:  # quadrant IV
-                    self.tnext = t0 + self.T + (asin(min(0.0, (x + self.dq)/self.xa))) / self.omega
-
-
-        elif self.source_type == SourceType.FUNCTION:
-
-            self.tnext = self.time + self.srcdt
-
-        else:
-
-            self.tnext = _INF
-
-        self.tnext = max(self.tnext, self.tlast + self.dtmin)
-
-    def f(self, qval):
-
-        d = 0.0
-
-        if self.source_type == SourceType.NONE:
-
-            if self.derivative:  # delegate  
-
-                if self.device:
-                    d = self.device.derivative()
-                else:
-                    d = self.derivative()
-
-            else:  # auto ode derivative: 
-                xsum = 0.0
-                for atom, gain in self.receive_from.items():
-                    xsum += atom.q * gain
-                d = self.ainv * (self.c - qval * self.b + xsum)
-
-        elif self.source_type == SourceType.RAMP:
-
-            d = self.ramp_slope
-
-        return d
-
-    def trigger(self):
+    def broadcast(self):
 
         for atom in self.broadcast_to:
             if atom is not self:
@@ -459,40 +459,147 @@ class Atom(object):
 
         if (self.dqmax - self.dqmin) < _EPS:
             return
-            
-        self.dq = min(self.dqmax, max(self.dqmin, abs(self.dqerr * self.q))) 
-            
+
+        self.dq = min(self.dqmax, max(self.dqmin, abs(self.dqerr * self.q)))
+
         self.qlo = self.q - self.dq
         self.qhi = self.q + self.dq
 
-    def save(self):
-    
-        if self.time != self.tout[-1]:
+    def clear_data_arrays(self):
 
-            self.tout.append(self.time)           
+        if self.sys.storage_type == StorageType.LIST:
+
+            self.tout = []
+            self.qout = []
+            self.nupd = []
+            self.tzoh = []
+            self.qzoh = []
+
+            self.tout_ss = []
+            self.xout_ss = []
+            self.nupd_ss = []
+
+            self.tode = []
+            self.xode = []
+            self.uode = []
+
+        elif self.sys.storage_type == StorageType.ARRAY:
+
+            typecode = "d"
+
+            self.tout = array(typecode)
+            self.qout = array(typecode)
+            self.nupd = array(typecode)
+
+            if len(self.tzoh > 0):
+                tzoh_last = self.tzoh[-1]
+                self.tzoh = array(typecode)
+                self.tzoj.append(tzoh_last)
+            else:
+                self.tzoh = array(typecode)
+
+            if len(self.qzoh > 0):
+                qzoh_last = self.qzoh[-1]
+                self.qzoh = array(typecode)
+                self.qzoh.append(qzoh_last)
+            else:
+                self.qzoh = array(typecode)
+
+            self.tout_ss = array(typecode)
+            self.xout_ss = array(typecode)
+            self.nupd_ss = array(typecode)
+
+            self.tode = array(typecode)
+            self.xode = array(typecode)
+            self.uode = array(typecode)
+
+        elif self.sys.storage_type == StorageType.DEQUE:
+
+            self.tout = deque()
+            self.qout = deque()
+            self.nupd = deque()
+            
+            if self.tzoh:
+                if len(self.tzoh) > 0:
+                    tzoh_last = self.tzoh[-1]
+                    self.tzoh = deque()
+                    self.tzoh.append(tzoh_last)
+                else:
+                    self.tzoh = deque()
+            else:
+                self.tzoh = deque()
+
+            if self.qzoh:
+                if len(self.qzoh) > 0:
+                    qzoh_last = self.qzoh[-1]
+                    self.qzoh = deque()
+                    self.qzoh.append(qzoh_last)
+                else:
+                    self.qzoh = deque()
+            else:
+                self.qzoh = deque()
+
+            self.tout_ss = deque()
+            self.xout_ss = deque()
+            self.nupd_ss = deque()
+
+            self.tode = deque()
+            self.xode = deque()
+            self.uode = deque()
+
+    def save_qss(self, t, force=False):
+
+        self.updates += 1
+
+        if t < self.savetime:
+            return
+        else:
+            self.savetime = t + MIN_DT_SAVE
+
+        if self.q != self.qlast or force:
+
+            self.tout.append(t)
             self.qout.append(self.q)
             self.nupd.append(self.updates)
 
-            self.tzoh.append(self.time)           
-            self.qzoh.append(self.q0)
-            self.tzoh.append(self.time)           
+            try:
+               self.qzoh.append(self.qzoh[-1])
+               self.tzoh.append(t)
+            except:
+                pass
+
+            self.tzoh.append(t)
             self.qzoh.append(self.q)
+
+    def save_ss(self, t, x):
+
+        self.tout_ss.append(t)
+        self.xout_ss.append(x)
+        self.nupd_ss.append(self.updates_ss)
+        self.updates_ss += 1
+
+    def save_ode(self, t, x):
+
+        self.tode.append(t)
+        self.xode.append(x)
+        self.uode.append(self.updates_ss)
+        self.updates_ode += 1
 
     def get_error(self, typ="l2"):
 
         # interpolate qss to ss time vector:
-        # this function can only be called after state space and qdl simualtions
+        # this function can only be called after state space AND qdl simualtions
         # are complete
 
         qout_interp = numpy.interp(self.tout2, self.tout, self.qout)
 
         if typ.lower().strip() == "l2":
 
-            # calculate the L^2 relative error:
+            # calculate the L**2 relative error:
             #      ________________
-            #     / sum((y - q)^2)
+            #     / sum((y - q)**2)
             #    /  --------------
-            #  \/      sum(y^2)
+            #  \/      sum(y**2)
 
             dy_sqrd_sum = 0.0
             y_sqrd_sum = 0.0
@@ -507,7 +614,7 @@ class Atom(object):
 
             # calculate the normalized relative root mean squared error:
             #      ________________
-            #     / sum((y - q)^2) 
+            #     / sum((y - q)**2)
             #    /  ---------------
             #  \/          N
             # -----------------------
@@ -520,13 +627,14 @@ class Atom(object):
                 dy_sqrd_sum += (y - q)**2
                 y_sqrd_sum += y**2
 
-            return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(self.qout2) - min(self.qout2))
+            return sqrt(dy_sqrd_sum / len(qout_interp)) / (max(self.qout2)
+                                                           - min(self.qout2))
 
 
         elif typ.lower().strip() == "re":
 
             # Pointwise relative error
-            # e = [|(y - q)| / |y|] 
+            # e = [|(y - q)| / |y|]
 
             e = []
 
@@ -538,13 +646,13 @@ class Atom(object):
         elif typ.lower().strip() == "rpd":
 
             # Pointwise relative percent difference
-            # e = [ 100% * 2 * |y - q| / (|y| + |q|)] 
+            # e = [ 100% * 2 * |y - q| / (|y| + |q|)]
 
             e = []
 
             for q, y in zip(qout_interp, self.qout2):
                 den = abs(y) + abs(q)
-                if den >= _EPS: 
+                if den >= _EPS:
                     e.append(100 * 2 * abs(y-q) / (abs(y) + abs(q)))
                 else:
                     e.append(0)
@@ -559,9 +667,13 @@ class Atom(object):
             if len(self.qout) >= 2:
                 return self.qout[-2]
             else:
-                return self.x0
+                return self.xlast
         else:
-            return self.x0
+            return self.xlast
+
+    def full_name(self):
+
+        return self.device.name + "." + self.name
 
     def __repr__(self):
 
@@ -572,202 +684,584 @@ class Atom(object):
         return __repr__(self)
 
 
-class ComplexAtom(Atom):
+class SourceAtom(Atom):
 
-    def __init__(self, *args, freq1=1.0, **kwargs):
+    def __init__(self, name, source_type=SourceType.CONSTANT, x0=0.0, x1=0.0,
+                 x2=0.0, xa=0.0, freq=0.0, phi=0.0, duty=0.0, t1=0.0, t2=0.0,
+                 srcfunc=None, gainfunc=None, dq=None, dqmin=None, dqmax=None, dqerr=None,
+                 dtmin=None, dmax=1e10, units=""):
 
-        Atom.__init__(self, *args, **kwargs)
+        Atom.__init__(self, name=name, x0=x0, dq=dq, dqmin=dqmin, dqmax=dqmax,
+                      dqerr=dqerr, dtmin=dtmin, dmax=dmax, units=units)
 
-        self.x0 = complex(self.x0, 0.0)
+        self.source_type = source_type
+        self.x0 = x0
+        self.x1 = x1
+        self.x2 = x2
+        self.xa = xa
+        self.freq = freq
+        self.phi = phi
+        self.duty = duty
+        self.t1 = t1
+        self.t2 = t2
+        self.srcfunc = srcfunc
+        self.gainfunc = gainfunc
 
-        # other member variables:
-        self.qlo = complex(0.0, 0.0)   
-        self.qhi = complex(0.0, 0.0)     
-        self.x = self.x0    
-        self.d = complex(0.0, 0.0)       
-        self.d0 = complex(0.0, 0.0)      
-        self.q = self.x0      
-        self.q0 = self.x0 
-        
-        self.freq1 = freq1
-        
-    def initialize(self, t0):
-
-        self.tlast = t0
-        self.time = t0
-        self.tnext = _INF
+        # source derived quantities:
 
         self.x = self.x0
-        self.q = self.x0
-        self.q0 = self.x0
-        self.dq = self.dqmin
-        self.qhi = complex(self.q.real + self.dq, self.q.imag + self.dq)
-        self.qlo = complex(self.q.real - self.dq, self.q.imag - self.dq)
-        
-        self.tout = [self.time]
-        self.qout = [self.q0]
-        self.nupd = [0]
 
-        self.tzoh = [self.time]
-        self.qzoh = [self.q0]
+        self.omega = 2.0 * pi * self.freq
 
-        self.updates = 0
+        self.period = _INF
+        if self.freq:
+            self.period = 1.0 / self.freq
 
-    def update(self, time):
+        if self.freq:
+            self.T = 1.0 / self.freq
 
-        self.time = time
-        self.updates += 1
-        self.triggered = False
+        if self.source_type == SourceType.RAMP:
+            self.x0 = self.x1
 
-        self.d = self.f(self.q)
+        self.ramp_slope = 0.0
+        if (self.t2 - self.t1) > 0:
+            self.ramp_slope = (self.x2 - self.x1) / (self.t2 - self.t1)
 
-        self.dint()
-        self.quantize()
+    def dint(self, t):
 
-        self.ta()
+        self.xprev = self.x
 
-        # trigger external update if quantized output changed:
-        
-        if self.q != self.q0:
-            self.save()
-            self.q0 = self.q
-            self.trigger()
-            self.update_dq()
+        if self.source_type == SourceType.FUNCTION:
 
-    def dint(self):
-        
-        self.x = complex(self.x.real + self.d.real * (self.time - self.tlast), 
-                         self.x.imag + self.d.imag * (self.time - self.tlast))
+            x = self.srcfunc(self.device, self.tlast)
 
-        self.tlast = self.time
+        elif self.source_type == SourceType.CONSTANT:
 
-    def step(self, time):
+            x = self.x0
 
-        self.time = time
-        self.updates += 1
-        self.d = self.f(self.x)
-        self.dint()
-        self.q = self.x
-        self.save()
-        self.q0 = self.q
+        elif self.source_type == SourceType.STEP:
+
+            if t < self.t1:
+                x = self.x0
+            else:
+                x = self.x1
+
+        elif self.source_type == SourceType.SINE:
+
+            if t >= self.t1:
+                x = self.x0 + self.xa * sin(self.omega * t + self.phi)
+            else:
+                x = self.x0
+
+        elif self.source_type == SourceType.PWM:
+
+            if self.duty <= 0.0:
+                x = self.x2
+
+            elif self.duty >= 1.0:
+                x = self.x1
+
+            else:
+
+                w = t % self.period
+
+                if ISCLOSE(w, self.period):
+                    x = self.x1
+
+                elif ISCLOSE(w, self.period * self.duty):
+                    x = self.x2
+
+                elif w < self.period * self.duty:
+                    x = self.x1
+
+                else:
+                    x = self.x2
+
+        elif self.source_type == SourceType.RAMP:
+
+            if t <= self.t1:
+                x = self.x1
+            elif t <= self.t2:
+                x = self.x1 + (t - self.t1) * self.dx
+            else:
+                x = self.x2
+
+        elif self.source_type == SourceType.FUNCTION:
+
+            x = self.srcfunc()
+
+        if self.sys.enable_slewrate:
+            if x > self.xprev:
+                self.x = min(x, self.dmax * self.dq * (t - self.tlast) + self.xprev)
+            elif x < self.u_prev:
+                self.x = max(x, -self.dmax * self.dq * (t - self.tlast) + self.xprev)
+        else:
+            self.x = x
+
+        if self.gainfunc:
+
+            k = self.gainfunc(self.device)
+            self.x *= k
+
+        return self.x
 
     def quantize(self):
-        
+
+        self.q = self.x
+        return False
+
+    def ta(self, t):
+
+        self.tnext = _INF
+
+        if self.source_type == SourceType.FUNCTION:
+
+            pass
+
+        if self.source_type == SourceType.RAMP:
+
+            if t < self.t1:
+                self.tnext = self.t1
+
+            elif t < self.t2:
+                if self.dx > 0.0:
+                    self.tnext = t + (self.q + self.dq - self.x) / self.dx
+                elif self.dx < 0.0:
+                    self.tnext = t + (self.q - self.dq - self.x) / self.dx
+                else:
+                    self.tnext = _INF
+
+            else:
+                self.tnext = _INF
+
+        elif self.source_type == SourceType.STEP:
+
+            if t < self.t1:
+                self.tnext = self.t1
+            else:
+                self.tnext = _INF
+
+        elif self.source_type == SourceType.SINE:
+
+            if t < self.t1:
+
+                self.tnext = self.t1
+
+            else:
+
+                w = t % self.T             # cycle time
+                t0 = t - w                 # cycle start time
+                theta = self.omega * w + self.phi  # wrapped angular position
+
+                # value at current time w/o dc offset:
+                x = self.xa * sin(2.0 * pi * self.freq * t)
+
+                # determine next transition time. Saturate at +/- xa:
+
+                # quadrant I
+                if theta < pi/2.0:
+                    self.tnext = (t0 + (asin(min(1.0, (x + self.dq) / self.xa)))
+                                  / self.omega)
+
+                # quadrant II
+                elif theta < pi:
+                    self.tnext = (t0 + self.T/2.0
+                                  - (asin(max(0.0, (x - self.dq) / self.xa)))
+                                  / self.omega)
+
+                # quadrant III
+                elif theta < 3.0*pi/2:
+                    self.tnext = (t0 + self.T/2.0
+                                  - (asin(max(-1.0, (x - self.dq) / self.xa)))
+                                  / self.omega)
+
+                # quadrant IV
+                else:
+                    self.tnext = (t0 + self.T
+                                  + (asin(min(0.0, (x + self.dq) / self.xa)))
+                                  / self.omega)
+
+        elif self.source_type == SourceType.PWM:
+
+            if self.duty <= 0.0 or self.duty >= 1.0:
+
+                self.tnext = _INF
+
+            else:
+
+                w = t % self.period
+
+                if ISCLOSE(w, self.period):
+                    self.tnext = t + self.period * self.duty
+
+                elif ISCLOSE(w, self.period * self.duty):
+                    self.tnext = t + self.period - w
+
+                elif w < self.period * self.duty:
+                    self.tnext = t + self.period * self.duty - w
+
+                else:
+                    self.tnext = t + self.period - w
+
+
+        elif self.source_type == SourceType.FUNCTION:
+
+            pass
+            #self.tnext = self.tlast + self.srcdt # <-- should we do this?
+
+        #self.tnext = max(self.tnext, self.tlast + self.dtmin)
+
+    def f(self, q, t):
+
+        d = 0.0
+
+        if self.source_type == SourceType.RAMP:
+
+            d = self.ramp_slope
+
+        elif self.source_type == SourceType.SINE:
+
+            d = self.omega * self.xa * cos(self.omega * t + self.phi)
+
+        elif self.source_type == SourceType.STEP:
+
+            pass  # todo: sigmoid approx?
+
+        elif self.source_type == SourceType.PWM:
+
+            pass  # todo: sigmoid approx?
+
+        elif self.source_type == SourceType.FUNCTION:
+
+            d = 0.0  # todo: add a time derivative function delegate
+
+        return d
+
+    def df(self, u, du, t):
+
+        d2 = 0.0
+
+        if self.source_type == SourceType.RAMP:
+
+            d2 = 0.0
+
+        elif self.source_type == SourceType.SINE:
+
+            d2 = -self.omega**2 * self.xa * sin(self.omega * t + self.phi)
+
+        elif self.source_type == SourceType.STEP:
+
+            pass  # todo: sigmoid approx?
+
+        elif self.source_type == SourceType.PWM:
+
+            pass  # todo: sigmoid approx?
+
+        elif self.source_type == SourceType.FUNCTION:
+
+            d2 = 0.0  # todo: add a 2nd time derivative function delegate
+
+        return d2
+
+
+class StateAtom(Atom):
+
+    """ Qdl State Atom.
+    """
+
+    def __init__(self, name, x0=0.0, coefficient=0.0, coeffunc=None,
+                 derfunc=None, der2func=None, dq=None, dqmin=None, dqmax=None, dqerr=None,
+                 dtmin=None, dmax=1e10, units=""):
+
+        Atom.__init__(self, name=name, x0=x0, dq=dq, dqmin=dqmin, dqmax=dqmax,
+                      dqerr=dqerr, dtmin=dtmin, dmax=dmax, units=units)
+
+        self.coefficient = coefficient
+        self.coeffunc = coeffunc
+        self.derfunc = derfunc
+        self.der2func = der2func
+
+    def dint(self, t):
+
+        self.x += self.dx * (t - self.tlast)
+
+        return self.x
+
+    def quantize(self, t=0.0, implicit=True):
+
         interp = False
         change = False
 
-        self.d0 = self.d
+        self.qlast = self.q
 
-        if self.x.real >= self.qhi.real:
+        if self.qss_method == QssMethod.QSS1:
 
-            self.q = complex(self.qhi.real, self.q.imag)
-            self.qlo = complex(self.qlo.real + self.dq, self.qlo.imag) 
-            change = True
+            if self.x >= self.q + self.dq:
 
-        elif self.x.real <= self.qlo.real:
+                self.q += self.dq
 
-            self.q = complex(self.qlo.real, self.q.imag)
-            self.qlo = complex(self.qlo.real - self.dq, self.qlo.imag) 
-            change = True
+            elif self.x <= self.q - self.dq:
 
-        if self.x.imag >= self.qhi.imag:
+                self.q -= self.dq
 
-            self.q = complex(self.q.real, self.qhi.imag)
-            self.qlo = complex(self.qlo.real, self.qlo.imag + self.dq) 
-            change = True
+        elif self.qss_method == QssMethod.QSS2:
 
-        elif self.x.imag <= self.qlo.imag:
+            if self.x >= self.q + self.dq:
 
-            self.q = complex(self.q.real, self.qlo.imag)
-            self.qlo = complex(self.qlo.real, self.qlo.imag - self.dq)
-            change = True
+                self.q += self.dq
 
-        self.qhi = complex(self.qlo.real + 2.0 * self.dq, self.qlo.imag + 2.0 * self.dq)
+            elif self.x <= self.q - self.dq:
 
-        if change and self.implicit:  # we've ventured out of (qlo, qhi) bounds
+                self.q -= self.dq
 
-            self.d = self.f(self.q)
-
-            # if the derivative has changed signs, then we know 
-            # we are in a potential oscillating situation, so
-            # we will set the q such that the derivative ~= 0:
-
-            if (self.d.real * self.d0.real) < 0 or (self.d.imag * self.d0.imag) < 0: 
-                flo = self.f(self.qlo) 
-                fhi = self.f(self.qhi)
-                if flo != fhi:
-                    a = (2.0 * self.dq) / (fhi - flo)
-                    self.q = self.qhi - a * fhi
-                    interp = True
-
-        return interp
-
-    def ta(self):
-
-        if self.d.real > 0.0:
-            treal = self.time + (self.qhi.real - self.x.real) / self.d.real
-        elif self.d.real < 0.0:
-            treal = self.time + (self.qlo.real - self.x.real) / self.d.real
-        else:
-            treal = _INF
-
-        if self.d.imag > 0.0:
-            timag = self.time + (self.qhi.imag - self.x.imag) / self.d.imag
-        elif self.d.imag < 0.0:
-            timag = self.time + (self.qlo.imag - self.x.imag) / self.d.imag
-        else:
-            timag = _INF
-
-        self.tnext = min(treal, timag)
-        self.tnext = max(self.tnext, self.tlast + self.dtmin)
-
-    def update_dq(self):
-
-        if not self.dqerr:
-            return
-        else:
-            if self.dqerr <= 0.0:
-                return
-
-        if not (self.dqmin or self.dqmax):
-            return
-
-        if (self.dqmax - self.dqmin) < _EPS:
-            return
+            if self.dx >= self.qd + self.dq:
             
-        self.dq = min(self.dqmax, max(self.dqmin, abs(self.dqerr * abs(self.q)))) 
+                self.qd += self.dq
             
-        self.qlo = self.q - complex(self.dq, self.dq) 
+            elif self.dx <= self.qd - self.dq:
+            
+                self.qd -= self.dq
 
-        self.qhi = self.q + complex(self.dq, self.dq) 
+        elif self.qss_method == QssMethod.LIQSS1:
+
+            # save previous derivative so we can see if the sign has changed:
+
+            self.dxlast = self.dx
+
+            # determine if the current internal state x is outside of the band:
+
+            if self.x >= self.qhi:
+
+                self.q = self.qhi
+                self.qlo += self.dq
+                change = True
+
+            elif self.x <= self.qlo:
+
+                self.q = self.qlo
+                self.qlo -= self.dq
+                change = True
+
+            self.qhi = self.qlo + 2.0 * self.dq
+
+            if change and self.implicit and implicit:
+
+                # we've ventured out of (qlo, qhi) bounds:
+
+                self.dx = self.f(self.q)
+
+                # if the derivative has changed signs, then we know
+                # we are in a potential oscillating situation, so
+                # we will set the q such that the derivative ~= 0:
+
+                if (self.dx * self.dxlast) < 0:
+
+                    # derivative has changed sign:
+
+                    flo = self.f(self.qlo)
+                    fhi = self.f(self.qhi)
+                    if flo != fhi:
+                        a = (2.0 * self.dq) / (fhi - flo)
+                        self.q = self.qhi - a * fhi
+                        interp = True
+
+            return interp
+
+        elif self.qss_method == QssMethod.LIQSS2:
+
+            """
+            Line number reference paper:
+
+            'Improving Linearly Implicit Quantized State System Methods'
+
+            (Algorithm 5 listing)
+
+            """
+
+            ex = t - self.tlast
+
+            # elapsed time since last qi update (10):
+
+            eq = t - self.tlastq
+
+            # store previous value of dxi/dt (8):
+
+            self.dxlast = self.dx
+
+            # affine coefficient projection (9):
+
+            self.u += ex * self.du
+
+            # store previous value of qi projected (11):
+
+            self.qlast = self.q + eq * self.qd
+
+            # h = MAX_2ND_ORDER_STEP_SIZE(xi) (12):
+
+            h = self.max_2nd_order_stepsize()
+
+            # 2ND_ORDER_STEP(x, h):
+
+            qd = self.dx + h * self.ddx
+
+            q = self.x + h * self.dx + h * h * self.ddx - h * self.q
+
+            if self.q >= self.qhi:
+
+                self.q = self.qhi
+                self.qlo += self.dq
+
+            elif self.q <= self.qlo:
+
+                self.q = self.qlo
+                self.qlo -= self.dq
+
+            if self.qd >= self.qdhi:
+
+                self.qd = self.qdhi
+                self.qdlo += self.dq
+
+            elif self.qd <= self.qdlo:
+
+                self.qd = self.d
+                self.qdlo -= self.dq
+
+            self.qhi = self.qlo + 2.0 * self.dq
+            self.qdhi = self.qdlo + 2.0 * self.dq
+
+            return True
+
+    def max_2nd_order_stepsize(self):
+
+        h1, h2, h3, h4 = 0, 0, 0, 0
+
+        den = self.a * self.qd + self.du - self.ddx
+
+        if den == 0.0:
+
+            return 0.0
+
+        h1 = -(self.a * self.x + self.u - self.dx + self.a * self.dq) / den
+
+        h2 = -(self.a * self.x + self.u - self.dx - self.a * self.dq) / den
+
+        h3 = -(2 * self.a * self.x + 2 * self.u - 2 * self.dx + 2 * self.a * self.dq) / den
+
+        h4 = -(2 * self.a * self.x + 2 * self.u - 2 * self.dx - 2 * self.a * self.dq) / den
+
+        return min([h1, h2, h3, h4])
+
+    def ta(self, t):
+
+        if self.qss_method == QssMethod.QSS1:
+
+            if self.dx > _EPS:
+                self.tnext = t + (self.q + self.dq - self.x) / self.dx
+            elif self.dx < -_EPS:
+                self.tnext = t + (self.q - self.dq - self.x) / self.dx
+            else:
+                self.tnext = _INF
+
+        elif self.qss_method == QssMethod.QSS2:
+
+            ta1 = _INF
+            ta2 = _INF
+
+            if self.dx > _EPS:
+                ta1 = t + (self.q + self.dq - self.x) / self.dx
+            elif self.dx < -_EPS:
+                ta1 = t + (self.q - self.dq - self.x) / self.dx
+
+            if self.ddx > _EPS:
+                ta2 = t + (self.qd + self.dq - self.dx) / self.ddx
+            elif self.ddx < -_EPS:
+                ta2 = t + (self.qd - self.dq - self.dx) / self.ddx
+
+            self.tnext = min(ta1, ta2)
+
+        elif self.qss_method == QssMethod.LIQSS1:
+
+            if self.dx > _EPS:
+                self.tnext = t + (self.qhi - self.x) / self.dx
+            elif self.dx < -_EPS:
+                self.tnext = t + (self.qlo - self.x) / self.dx
+            else:
+                self.tnext = _INF
+
+        elif self.qss_method == QssMethod.LIQSS2:
+
+            ta1 = _INF
+            ta2 = _INF
+
+            if self.dx > _EPS:
+                ta1 = t + (self.qhi - self.x) / self.dx
+            elif self.dx < -_EPS:
+                ta1 = t + (self.qlo - self.x) / self.dx
+            else:
+                self.tnext = _INF
+
+            if self.ddx > _EPS:
+                ta2 = t + (self.qdhi - self.dx) / self.ddx
+            elif self.ddx < -_EPS:
+                ta2 = t + (self.qdlo - self.dx) / self.ddx
+
+            self.tnext = min(ta1, ta2)
+
+        self.tnext = max(self.tnext, t + self.dtmin)
+
+    def compute_coefficient(self):
+
+        if self.coeffunc:
+            return self.coeffunc(self.device)
+        else:
+            return self.coefficient
+
+    def f(self, q, t=0.0):
+
+        if self.derfunc:
+            if self.derargfunc:
+                args = self.derargfunc(self.device)
+                return self.derfunc(*args)
+            else:
+                return self.derfunc(self.device, q)
+
+        d = self.compute_coefficient() * q
+
+        for connection in self.connections:
+            d += connection.value()
+
+        return d
+
+    def df(self, x, d, t=0.0):
+
+        if self.derfunc:
+            return self.der2func(self.device, x, d)
+
+        d2 = self.compute_coefficient() * d
+
+        for connection in self.connections:
+            d2 += connection.value()
+
+        return d2
+
+    def set_state(self, x):
+
+        self.x = x
+        self.q = x
+        self.qlo = x - self.dq
+        self.qhi = x + self.dq
 
 
 class System(object):
 
-    def __init__(self, name="sys", dq=None, dqmin=None, dqmax=None, dqerr=None, dtmin=None,
-                 dmax=None, print_time=False):
-        
+    def __init__(self, name="sys", qss_method=QssMethod.LIQSS1, dq=None, dqmin=None,
+                 dqmax=None, dqerr=None, dtmin=None, dmax=None):
+
+        global sys
+        sys = self
+
         self.name = name
-
-        self.dq = DEF_DQ
-        if dq:
-            self.dq = dq
-
-        self.dqmin = DEF_DQMIN
-        if dqmin:
-            self.dqmin = dqmin
-        elif dq:
-            self.dqmin = dq
-
-        self.dqmax = DEF_DQMAX
-        if dqmax:
-            self.dqmax = dqmax
-        elif dq:
-            self.dqmax = dq
-
-        self.dqerr = DEF_DQERR
-        if dqerr:
-            self.dqerr = dqerr
+        self.qss_method = qss_method
 
         self.dtmin = DEF_DTMIN
         if dtmin:
@@ -777,16 +1271,47 @@ class System(object):
         if dmax:
             self.dmax = dmax
 
-        self.print_time = print_time
+        # child elements:
 
         self.devices = []
         self.atoms = []
-        self.ss = None
+        self.state_atoms = []
+        self.source_atoms = []
+        self.n = 0
+        self.m = 0
 
         # simulation variables:
+
         self.tstop = 0.0  # end simulation time
         self.time = 0.0   # current simulation time
+        self.tsave = 0.0  # saved time for state restore
         self.iprint = 0   # for runtime updates
+        self.dt = 1e-4
+        self.enable_slewrate = False
+        self.jacobian = None
+        self.Km = 1.2
+
+        self.savedt = 0.0   # max dt for saving data. Save all if zero
+
+        self.tocsv = False  # send data to csv files
+        self.outdir = None  # send data to csv files
+
+        # events:
+
+        self.events = {}
+
+        # memory management:
+        self.storage_type = StorageType.LIST
+
+        self.show_time = False
+        self.time_queue = queue.Queue()
+
+    def schedule(self, func, t):
+
+        if not t in self.events:
+            self.events[t] = []
+
+        self.events[t].append(func)
 
     def add_device(self, device):
 
@@ -797,14 +1322,14 @@ class System(object):
             if not atom.dq:
                 atom.dq = self.dq
 
-            if not atom.dqmin:
-                atom.dqmin = self.dqmin
-
-            if not atom.dqmax:
-                atom.dqmax = self.dqmax
-
-            if not atom.dqerr:
-                atom.dqerr = self.dqerr
+            #if not atom.dqmin:
+            #    atom.dqmin = self.dqmin
+            #
+            #if not atom.dqmax:
+            #    atom.dqmax = self.dqmax
+            #
+            #if not atom.dqerr:
+            #    atom.dqerr = self.dqerr
 
             if not atom.dtmin:
                 atom.dtmin = self.dtmin
@@ -812,277 +1337,759 @@ class System(object):
             if not atom.dmax:
                 atom.dmax = self.dmax
 
+            if not atom.qss_method:
+                atom.qss_method = self.qss_method
+
+            atom.device = device
             atom.sys = self
+
             self.atoms.append(atom)
+
+            if isinstance(atom, StateAtom):
+                atom.index = self.n
+                self.state_atoms.append(atom)
+                self.n += 1
+
+            elif isinstance(atom, SourceAtom):
+                atom.index = self.m
+                self.source_atoms.append(atom)
+                self.m += 1
 
         setattr(self, device.name, device)
 
     def add_devices(self, *devices):
 
         for device in devices:
+            device.setup_connections()
+
+        for device in devices:
+            device.setup_functions()
+
+        for device in devices:
             self.add_device(device)
 
-    def connect(self, from_port, *to_ports):
+    def save_state(self):
 
-        for to_port in to_ports:
-            
-            if to_port.direction == PortDirection.INOUT:
-                
-                from_port.connected_ports.append(to_port)
-                to_port.connected_ports.append(from_port)
-
-                to_port.atom.broadcast_to.append(from_port.atom)
-                from_port.atom.broadcast_to.append(to_port.atom)
-
-                to_port.atom.receive_from[from_port.atom] = to_port.gain
-                from_port.atom.receive_from[to_port.atom] = from_port.gain
-
-    def initialize(self, t0=0.0, ss=False, dc=False):
-
-        self.time = t0
-
-        if dc:
-            self.solve_dc()
+        self.tsave = self.time
 
         for atom in self.atoms:
-            atom.initialize(t0)
+            atom.qsave = atom.q
+            atom.xsave = atom.x
 
-    def initialize_ss(self, dt, dc=False, reset_state=True):
+    def clear_data_arrays(self):
+
+        for atom in self.atoms:
+            atom.clear_data_arrays()
+
+    def state_to_file(self, path):
+
+        state = {}
+
+        state["time"] = self.time
+        state["tsave"] = self.tsave
+        state["state_atoms"] = {}
+        state["source_atoms"] = {}
+
+        for atom in self.state_atoms:
+            state["state_atoms"][atom.index] = atom.state_to_dict()
+
+        for atom in self.source_atoms:
+            state["source_atoms"][atom.index] = atom.state_to_dict()
+
+        with open(path, "wb") as f:
+            pickle.dump(state, f)
+
+    def state_from_file(self, path):
+
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+
+        self.time = state["time"] 
+        self.tsave = state["tsave"]
+
+        for atom in self.state_atoms:
+            atom.state_from_dict(state["state_atoms"][atom.index])
+
+        for atom in self.source_atoms:
+            atom.state_from_dict(state["source_atoms"][atom.index])
+
+    def connect(self, from_port, to_port):
+
+        from_port.connect(to_port)
+
+    def restore_state(self):
+
+        self.time = self.tsave
+
+        for atom in self.atoms:
+            atom.q = atom.qsave
+            atom.x = atom.xsave
+
+            atom.qhi = atom.q + atom.dq
+            atom.qlo = atom.q - atom.dq
+
+    def get_jacobian(self):
+
+        jacobian = np.zeros((self.n, self.n))
+
+        for atom in self.state_atoms:
+            for other, func in atom.jacfuncs:
+                if atom.derargfunc:
+                    args = atom.derargfunc(atom.device)
+                    jacobian[atom.index, other.index] = func(*args)
+                else:
+                    if atom is other:
+                        jacobian[atom.index, other.index] = func(atom.device, atom.q)
+                    else:
+                        jacobian[atom.index, other.index] = func(atom.device, atom.q, other.index)
+
+        return jacobian
+
+    @staticmethod
+    def fode(t, x, sys):
+
+        """Returns array of derivatives from state atoms. This function must be
+        a static method in order to be passed as a delgate to the
+        scipy ode integrator function. Note that sys is a global module variable.
+        """
+
+        dx_dt = [0.0] * sys.n
+
+        for atom in sys.state_atoms:
+            atom.q = x[atom.index]
+
+        for atom in sys.state_atoms:
+            dx_dt[atom.index] = atom.f(atom.q, t)
+
+        return dx_dt
+
+    @staticmethod
+    def fode2(x, t=0.0, sys=None):
+
+        """Returns array of derivatives from state atoms. This function must be
+        a static method in order to be passed as a delgate to the
+        scipy ode integrator function. Note that sys is a global module variable.
+        (not that this function differs from self.fode in the argument order).
+        """
+
+        dx_dt = [0.0] * sys.n
+
+        for atom in sys.state_atoms:
+            atom.q = x[atom.index]
+
+        for atom in sys.state_atoms:
+            dx_dt[atom.index] = atom.f(atom.q, t)
+
+        return dx_dt
+
+    def solve_dc(self, init=True, set=True):
+
+        xi = [0.0]*self.n
+
+        for atom in self.state_atoms:
+            if init:
+                xi[atom.index] = atom.x0
+            else:
+                xi[atom.index] = atom.x
+
+        xdc = fsolve(self.fode2, xi, args=(0, sys), xtol=1e-12)
+
+        for atom in self.state_atoms:
+            if init:
+                atom.x0 = xdc[atom.index]
+            elif set:
+                atom.x = xdc[atom.index]
+                atom.q = atom.x
+
+        return xdc
+
+    def initialize(self, t0=0.0, dt=1e-4, dc=False, savedt=0.0, tocsv=False, outdir=None):
+
+        self.time = t0
+        self.dt = dt
+
+        self.savedt = savedt
+
+        self.tocsv = tocsv
+        self.outdir = outdir
+
+        self.dq0 = np.zeros((self.n, 1))
+
+        for atom in self.state_atoms:
+            self.dq0[atom.index] = atom.dq0
 
         if dc:
             self.solve_dc()
 
-        self.build_ss(dt)
+        for atom in self.state_atoms:
+            atom.initialize(self.time)
 
-        self.ss.initialize(dt, reset_state=reset_state)
+        for atom in self.source_atoms:
+            atom.initialize(self.time)
 
-    def get_nodes_and_branches(self):
+    def clear_data_arrays(self):
 
-        nodes = []
-        branches = []
-        index = 1
+        for atom in self.atoms:
+            atom.clear_data_arrays()
 
-        for device in self.devices:
+    def print_time(self):
 
-            for atom in device.atoms:
+        while self.show_time:
+            time.sleep(1.0)
+            print(simtime)
 
-                if (atom.lim_type == LimAtomType.GROUND_NODE):
-
-                    device.atom.index = 0
-                    nodes.append(device.atom)
-
-                elif (atom.lim_type in (LimAtomType.LATENCY_NODE,
-                                        LimAtomType.CONST_NODE)):
-                    atom.index = index
-                    index += 1
-                    nodes.append(atom)
-
-        for device in self.devices:
-
-            for atom in device.atoms:
-
-                if (atom.lim_type in (LimAtomType.LATENCY_BRANCH,
-                                      LimAtomType.CONST_BRANCH)):
-
-                    atom.index = index
-                    index += 1
-                    branches.append(atom)
-
-        return nodes, branches
-
-    def build_ss(self, dt):
-
-        nodes, branches = self.get_nodes_and_branches()
-
-        n = len(nodes) + len(branches)
-
-        # dimension state space matrices:
-
-        a = np.zeros((n, n))
-        b = np.zeros((n, n))
-        u = np.zeros((n, 1))
-        x0 = np.zeros((n, 1))
-
-        for node in nodes:
-
-            ii = node.index
-
-            x0[ii] = node.x0
-
-            if ii == 0:
-                continue
-
-            a[ii, ii] = -node.b / node.a
-            b[ii, ii] = 1.0 / node.a
-            u[ii, 0] = node.c
-
-            for branch in branches:
-
-                k = branch.index
-                i = branch.device.negative.connected_ports[0].atom.index
-                j = branch.device.positive.connected_ports[0].atom.index
-
-                if ii == i:
-                    a[i, k] = -1.0 / node.a
-
-                elif ii == j:
-                    a[j, k] = 1.0 / node.a
-
-        for branch in branches:
-
-            k = branch.index
-
-            x0[k] = branch.x0
-
-            i = branch.device.negative.connected_ports[0].atom.index
-            j = branch.device.positive.connected_ports[0].atom.index
-
-            a[k, k] = -branch.b / branch.a
-            a[k, i] = 1.0 / branch.a
-            a[k, j] = -1.0 / branch.a
-
-            b[k, k] = 1.0 / branch.a
-            u[k, 0] = branch.c
-
-        if not self.ss:
-
-            # make a new state space model (skip ground row/col):
-
-            self.ss = lti.StateSpace(a[1:, 1:], b[1:, 1:], u0=u[1:,:], x0=x0[1:,:])
+    #def run_threaded(self, tstop, ode=True, qss=True, verbose=2, qss_fixed_dt=None,
+    #        ode_method="RK45", optimize_dq=False, chk_ss_delay=None):
+    #
+    #    args = (tstop, ode, qss, verbose, qss_fixed_dt, ode_method, optimize_dq, chk_ss_delay)
+    #
+    #    self.show_time = True
+    #
+    #    self.print_thread = th.Thread(target=self.print_time)
+    #    self.run_thread = th.Thread(target=self.run_threaded, args=args)
+    #
+    #    self.print_thread.start()
+    #    self.run_thread.start()
         
-        else:
-
-            # update existing model (skip ground row/col):
-
-            self.ss.a = a[1:, 1:]
-            self.ss.b = b[1:, 1:]
-            self.ss.u0 = u[1:,:]
-            self.ss.x0 = x0[1:,:]
-
-    def solve_dc(self, rmin=1e-6):
-
-        """solves for the dc steady-state of this systems by building
-        and solving the conductance matrix of the system:
-        
-        G*x = b,  x = (G^-1)*b
-
-        If branch R is zero, a small ficticous resistance (rmin) is added.
-        """
-
-        nodes, branches = self.get_nodes_and_branches()
-
-        n = len(nodes)
-        k = len(branches)
-
-        g = np.zeros((n, n))
-        b = np.zeros((n, 1))
-
-        states = np.zeros((n+k, 1))
-
-        for node in nodes:
-
-            i = node.index
-
-            if i != 0:
-                g[i, i] += node.b
-                b[i] += node.c
-
-        for branch in branches:
-
-            i = branch.device.positive.connected_ports[0].atom.index
-            j = branch.device.negative.connected_ports[0].atom.index
-
-            if branch.b:
-                rinv = 1.0 / branch.b
-            else:
-                rinv = 1.0 / rmin
-
-            g[i, i] += rinv
-            g[i, j] -= rinv
-            g[j, i] -= rinv
-            g[j, j] += rinv
-
-            b[i] += branch.c * rinv
-            b[j] -= branch.c * rinv
-
-        states[1:n] = la.solve(g[1:,1:], b[1:])
-
-        for node in nodes:
-            node.x0 = states[node.index, 0]
-
-        for branch in branches:
-
-            k = branch.index
-            i = branch.device.positive.connected_ports[0].atom.index
-            j = branch.device.negative.connected_ports[0].atom.index
-
-            if branch.b:
-                rinv = 1.0 / branch.b
-            else:
-                rinv = 1.0 / rmin
-
-            branch.x0 = (-states[i, 0] + states[j, 0] + branch.c) * rinv
-
-    def run_to(self, tstop, fixed_dt=None, verbose=False):
+    def run(self, tstop, ode=True, qss=True, verbose=2, qss_fixed_dt=None,
+            ode_method="RK45", optimize_dq=False, chk_ss_delay=None):
 
         self.tstop = tstop
 
-        print("Simulation started...")
+        self.verbose = verbose
+        self.calc_ss = False
 
-        if fixed_dt:
-            dt = fixed_dt
-            i = 0
-            while(self.time < self.tstop):
-                for atom in self.atoms:
-                    atom.step(self.time)
-                    atom.save()
-                if i >= 100: 
-                    print("t = {0:5.2f} s".format(self.time))
-                    i = 0
-                i += 1
-                self.time += dt
-            return
+        #self.show_time = True
+        #self.print_thread = th.Thread(target=self.print_time)
+        #self.print_thread.start()
 
-        #self.print_percentage(header=True)
+        if optimize_dq or chk_ss_delay:
+            self.calc_ss = True
+            self.update_steadystate_distance()
 
-        for i in range(1):
+        self.ode_method = ode_method
+
+        # add the 'tstop' or end of simulation event to the list:
+
+        self.events[self.tstop] = None  # no function to call at tstop event
+
+        ran_events = []
+
+        # get the event times and event function lists, sorted by time:
+
+        sorted_events = sorted(self.events.items())
+
+        # loop through the event times and solve:
+
+        print("Simulation started......")
+
+        start_time = time.time()
+
+        for event_time, events in sorted_events:
+
+            if self.calc_ss:
+                self.calc_steadystate()
+
+            if optimize_dq:
+                self.optimize_dq()
+                self.update_steadystate_distance()
+
+            if ode:
+
+                print("ODE solution started to next event...")
+
+                if qss: self.save_state()
+
+                xi = [0.0]*self.n
+                for atom in self.state_atoms:
+                    xi[atom.index] = atom.x
+
+                tspan = (self.time, event_time)
+
+                soln = solve_ivp(self.fode, tspan, xi, ode_method, args=(sys,),
+                                 max_step=self.dt)
+                t = soln.t
+                x = soln.y
+
+                for i in range(len(t)):
+
+                    for atom in self.state_atoms:
+                        atom.q = x[atom.index, i]
+                        atom.save_ode(t[i], atom.q)
+
+                    for atom in self.source_atoms:
+                        atom.save_ode(t[i], atom.q)
+                        atom.dint(t[i])
+
+                for atom in self.state_atoms:
+                    xf = x[atom.index, -1]
+                    atom.x = xf
+                    atom.q = xf
+
+                print("ODE solution completed to next event.")
+
+            if qss:
+
+                print("QSS solution started to next event...")
+
+                if ode: self.restore_state()
+
+                if self.qss_method == QssMethod.QSS1:
+
+                    self.run_qss1()
+
+                elif self.qss_method == QssMethod.QSS2:
+
+                    self.run_qss2()
+
+                elif self.qss_method == QssMethod.LIQSS1:
+
+                    self.run_liqss1(event_time)
+
+                elif self.qss_method == QssMethod.LIQSS2:
+
+                    self.run_liqss2()
+
+                print("QSS solution completed to next event.")
+
+            if events:
+
+                for event in events:
+                    event(self)
+
+                ran_events.append(event_time)
+
+            self.time = event_time
+
+            if self.time >= self.tstop:
+                break  # (do not go to any more event, tstop has been reached)
+
+        # remove run events:
+
+        for eventtime in ran_events:
+            del self.events[eventtime]
+
+        del self.events[self.tstop]
+
+        #self.show_time = False
+        #self.print_thread.join()
+
+        print(f"Simulation complete. Total run time = {time.time() - start_time} s.")
+
+    def run_qss1(self):
+
+        t = self.time
+
+        for atom in self.atoms:
+            atom.dx = atom.f(atom.q, t)
+            atom.ta(t)
+            atom.tlast = t
+            atom.save_qss(t)
+
+        while(t < self.tstop):                      # 1
+
+            if self.verbose == 2: print(t)
+
+            atomi = None
+            t = self.tstop
+
             for atom in self.atoms:
-                atom.update(self.time)
-                atom.save()
+                if atom.tnext <= t:
+                    t = atom.tnext                  # 2
+                    atomi = atom                    # 3
 
-        i = 0
-        while i < _MAXITER:
-            triggered = False
-            for atom in self.atoms:
-                if atom.triggered:
-                    triggered = True
-                    atom.update(self.time)
-            if not triggered:
-                break
-            i += 1
+            if not atomi: break
 
-        # main simulation loop:
+            e = t - atomi.tlast                     # 4
+            atomi.x = atomi.x + atomi.dx * e        # 5
+            atomi.quantize()                        # 6
+            atomi.ta(t)                             # 7
 
-        tlast = self.time
-        last_print_time =  self.time
+            for atomj in atomi.broadcast_to:        # 8
 
-        while self.time < self.tstop:
-            self.advance()
-            if verbose and self.time-last_print_time > 0.1:
-                print("t = {0:5.2f} s".format(self.time))
-                last_print_time = self.time
-            tlast = self.time
+                e = t - atomj.tlast                 # 9
+                atomj.x = atomj.x + atomj.dx * e     # 10
 
-        # force time to tstop and do one update at time = tstop:
+                atomj.dx = atomj.f(atomj.q, t)       # 12
+                atomj.ta(t)                         # 13
+
+                if atomj is not atomi:
+                    atomj.tlast = t                 # 11
+
+            atomi.tlast = t                         # 13
+            atomi.save_qss(t)
+
+        for atom in self.atoms:
+
+            atom.tlast = t
+            atom.save_qss(t, force=True)
 
         self.time = self.tstop
 
-        for atom in self.atoms:
-            atom.update(self.time)
-            atom.save()
+    def run_qss2(self):
 
-        #self.print_percentage()
-        #self.print_percentage(footer=True)
+        t = self.time
+
+        if t == self.tstart:
+            for atom in self.atoms:
+                atom.dx = atom.f(atom.q, t)
+                atom.ddx = atom.df(atom.q, atom.dx, t)
+                atom.ta(t)
+                atom.tlast = t
+                atom.save_qss(t)
+
+        while(t < self.tstop):                                # 1
+
+            if self.verbose == 2: print(t)
+
+            atomi = None
+            t = self.tstop
+
+            for atom in self.atoms:
+                if atom.tnext <= t:
+                    t = atom.tnext                            # 2
+                    atomi = atom                              # 3
+
+            if not atomi: break
+
+            e = t - atomi.tlast                               # 4
+            ee = e**2
+
+            atomi.x += atomi.dx * e + 0.5 * atomi.ddx * ee     # 6
+            atomi.dx += atomi.ddx * e                          # 7
+
+            if atomi.q >= atomi.q + atomi.dq:
+                atomi.q += atomi.dq
+
+            elif atomi.q <= atomi.q - atomi.dq:
+                atomi.q -= atomi.dq
+
+            atomi.qd = atomi.dx
+
+            # 11:
+
+            ta1 = _INF
+            ta2 = _INF
+
+            if atomi.dx > _EPS:
+                ta1 = t + (atomi.q + atomi.dq - atomi.x) / atomi.dx
+            elif atomi.dx < -_EPS:
+                ta1 = t + (atomi.q - atomi.dq - atomi.x) / atomi.dx
+
+            if atomi.ddx > _EPS:
+                ta2 = t + (atomi.qd + atomi.dq - atomi.dx) / atomi.ddx
+            elif atomi.ddx < -_EPS:
+                ta2 = t + (atomi.qd - atomi.dq - atomi.dx) / atomi.ddx
+
+            self.tnext = max(t, min(ta1, ta2))
+
+            for atomj in atomi.broadcast_to:                   # 12
+
+                e = t - atomj.tlast                            # 13
+                ee = e**2
+                atomj.x += atomj.dx * e + 0.5 * atomj.ddx * ee # 15
+
+                atomj.dx = atomj.f(atomj.q, t)                 # 16
+                atomj.ddx = atomj.df(atomj.q, atomj.dx, t)     # 17
+                
+                # 18:
+
+                ta1 = _INF
+                ta2 = _INF
+
+                if atomj.dx > _EPS:
+                    ta1 = t + (atomj.q + atomj.dq - atomj.x) / atomj.dx
+                elif atomj.dx < -_EPS:
+                    ta1 = t + (atomj.q - atomj.dq - atomj.x) / atomj.dx
+
+                if atomi.ddx > _EPS:
+                    ta2 = t + (atomj.qd + atomj.dq - atomj.dx) / atomj.ddx
+                elif atomi.ddx < -_EPS:
+                    ta2 = t + (atomj.qd - atomj.dq - atomj.dx) / atomj.ddx
+
+                atomj.tnext = max(t, min(ta1, ta2))
+
+                if atomj is not atomi:
+                    atomj.tlast = t                            # 19
+
+            atomi.tlast = t                                    # 21
+            atomi.save_qss(t)
+
+        for atom in self.atoms:
+
+            atom.tlast = t
+            atom.save_qss(t, force=True)
+
+        self.time = self.tstop           
+
+    def run_liqss1(self, tnext):
+
+        #global simtime
+
+        t = self.time
+
+        i = 0
+        n = 1e6
+
+        for atom in self.atoms:
+            atom.dx = atom.f(atom.q, t)
+            atom.ta(t)
+            atom.tlast = t
+            atom.save_qss(t)
+
+        while(t < tnext and t < self.tstop):        # 1
+
+            if self.verbose == 2: print(t)
+
+            atomi = None
+            t = tnext
+
+            for atom in self.atoms:
+                if atom.tnext <= t:
+                    t = atom.tnext                  # 2
+                    atomi = atom                    # 3
+
+            if not atomi: break
+
+            e = t - atomi.tlast                     # 4
+            atomi.x = atomi.x + atomi.dx * e        # 5
+            atomi.quantize()                        # 6
+            atomi.ta(t)                             # 7
+
+            for atomj in atomi.broadcast_to:        # 8
+
+                e = t - atomj.tlast                 # 9
+                atomj.x = atomj.x + atomj.dx * e    # 10
+
+                if atomj is not atomi:
+                    atomj.tlast = t                 # 11
+
+                atomj.dx = atomj.f(atomj.q, t)      # 12
+                atomj.ta(t)                         # 13
+
+            atomi.tlast = t                         # 13
+            atomi.save_qss(t)
+            
+            #simtime = t
+
+            i = i + 1
+            if i > n:
+                i = 0
+                print(t)
+
+        self.time = tnext
+
+        for atom in self.atoms:
+
+            atom.tlast = t
+            atom.save_qss(t, force=True)
+
+    def run_liqss1_test(self):
+
+        t = self.time
+
+        for atom in self.atoms:
+
+            atom.dxlast = atom.dx
+            atom.dx = atom.f(atom.q, t)
+            atom.a = (atom.dx - atom.dxlast) / (2 * atom.dq)
+            atom.u = atom.dx - atom.a * atom.q
+            atom.tlast = t
+            atom.ta(t)
+            atom.save_qss(t)
+
+        while(t < self.tstop):                      # 1
+
+            if self.verbose == 2: print(t)
+
+            atomi = None
+            t = self.tstop
+
+            for atom in self.atoms:
+                if atom.tnext <= t:
+                    t = atom.tnext                  # 2
+                    atomi = atom                    # 3
+
+            if not atomi: break
+
+            e = t - atomi.tlast                     # 4
+
+            atomi.x = atomi.x + atomi.dx * e        # 5
+
+            atomi.qlast = atomi.q                   # 6
+
+            atomi.dxlast = atomi.dx                 # 7
+
+            dx_sign = 0
+            if atomi.dx > 0: dx_sign = 1
+            elif atomi.dx < 0: dx_sign = -1
+
+            dx_plus = atomi.a * (atomi.x + dx_sign * atomi.dq) + atomi.u   # 8
+
+            
+
+            if atomi.x >= atomi.qhi:
+
+                atomi.q = atomi.qhi
+                atomi.qlo += atomi.dq
+
+            elif atomi.x <= atomi.qlo:
+
+                atomi.q = atomi.qlo
+                atomi.qlo -= atomi.dq
+
+            if atomi.dx * dx_sign < 0:
+
+                atomi.q = -atomi.u / atomi.a
+
+            atomi.qhi = atomi.qlo + 2.0 * atomi.dq
+
+            # 7:
+
+            if atomi.dx > _EPS:
+                ta = t + (atomi.qhi - atomi.x) / atomi.dx
+            elif atomi.dx < -_EPS:
+                ta = t + (atomi.qlo - atomi.x) / atomi.dx
+            else:
+                ta = _INF
+
+            atomi.tnext = max(t, ta)
+
+            for atomj in atomi.broadcast_to:        # 8
+
+                e = t - atomj.tlast                 # 9
+                atomj.x = atomj.x + atomj.dx * e    # 10
+
+                if atomj is not atomi:
+                    atomj.tlast = t                 # 11
+
+                atomj.dx = atomj.f(atomj.q, t)      # 12
+
+                # 13:
+
+                if atomj.dx > _EPS:
+                    ta = t + (atomj.qhi - atomj.x) / atomj.dx
+                elif atomj.dx < -_EPS:
+                    ta = t + (atomj.qlo - atomj.x) / atomj.dx
+                else:
+                    ta = _INF
+
+                atomj.tnext = max(t, ta)
+
+            atomi.a = (atomi.dx - atomi.dxlast) / (2 * atomi.dq)  # 23
+
+            atomi.u = atomi.dx - atomi.a * atomi.q  # 24
+
+            atomi.tlast = t                         # 25
+
+            atomi.save_qss(t)
+
+        for atom in self.atoms:
+
+            atom.tlast = t
+            atom.save_qss(t, force=True)
+
+        self.time = self.tstop
+
+    def run_liqss2(self):
+
+        t = self.time
+
+        for atom in self.atoms:
+
+            atom.dx = atom.f(atom.q, t)
+            atom.ddx = atom.df(atom.dx, atom.q, t)
+
+            atom.a = 0.0
+            atom.u = atom.dx
+            atom.du = atom.ddx
+
+            atom.ta(t)
+            atom.tlast = t
+            atom.tlastq = t
+
+            atom.save_qss(t)
+
+        while(t < self.tstop):                      # 1
+
+            if self.verbose == 2: print(t)
+
+            atomi = None
+            t = self.tstop
+
+            for atom in self.atoms:
+                if atom.tnext <= t:
+                    t = atom.tnext                  # 2
+                    atomi = atom                    # 3
+
+            if not atomi: break
+
+            e = t - atomi.tlast                     # 4
+            ee = e**2
+
+            atomi.x += atomi.dx * e + 0.5 * atomi.ddx * ee  # 6
+            atomi.dx += atomi.ddx * e                       # 7
+
+            atomi.quantize(t)                       # 8-13
+
+            atomi.tlastq = t                        # 14
+
+            atomi.ta(t)                             # 15
+
+            for atomj in atomi.broadcast_to:        # 16
+
+                e = t - atomj.tlast                 # 17-18
+
+                atomj.x += atomj.dx * e + 0.5 * atomj.ddx * ee  # 18
+
+                atomj.dx = atomj.f(atomj.q, t)               # 16
+
+                atomj.ddx = atomj.df(atomj.q, atomj.dx, t)   # 17
+
+                atomj.ta(t)                                  # 18
+
+                if atomj is not atomi:
+                    atomj.tlast = t                 # 23-25
+
+            if atomi.q != atomi.qlast:
+
+                atomi.a = (atomi.dx - atomi.dxlast) / (atomi.q - atomi.qlast)  # 26
+
+                atomi.u = atomi.dx - atomi.a * atomi.q        # 27
+
+                atomi.du = atomi.ddx - atomi.a * atomi.qd     # 28
+
+            atomi.tlast = t
+
+            atomi.save_qss(t)
+
+        for atom in self.atoms:
+
+            atom.tlast = t
+            atom.save_qss(t, force=True)
+
+        self.time = self.tstop
+
+    def get_next(self):
+
+        # Get next time and flag atoms to solve:
+
+        tnext = _INF
+        anext = None
+
+        for atom in self.atoms:
+            tnext = min(atom.tnext, tnext)
+            anext = atom
+
+        # limit by minimum time step:
+
+        #tnext = max(tnext, self.time + _EPS)
+
+        # limit by end of simulation section (to next scheduled event):
+
+        tnext = min(tnext, self.tstop)
+
+        return anext, tnext
 
     def advance(self):
 
@@ -1094,74 +2101,257 @@ class System(object):
         self.time = max(tnext, self.time + _EPS)
         self.time = min(self.time, self.tstop)
 
-        for atom in self.atoms:
-            if atom.tnext <= self.time or self.time >= self.tstop:
-                atom.update(self.time)
+        if 0:  # method 1: all < tnext atoms w/ nested triggered (one iter)
 
-        i = 0
-        while i < _MAXITER:
-            triggered = False
             for atom in self.atoms:
-                if atom.triggered:
-                    triggered = True
+
+                if atom.tnext <= self.time:
+
                     atom.update(self.time)
-            if not triggered:
-                break
-            i += 1
 
-    def run_ss_to(self, tstop):
+                    for atom in self.atoms:
 
-        self.ss.run_to(tstop)
+                        if atom.triggered:
 
-    def finalize_ss(self):
+                            atom.update(self.time)
 
-        # concatenate the data for number of "updates" (time steps):
+        if 0:  # method 2: all < tnext atoms then triggered (one iter)
 
-        self.ss_tupd = [self.ss.t[0], self.ss.t[-1]]
-        self.ss_nupd = [0, len(self.ss.t)]
+            for atom in self.atoms:
 
-    def save_data(self):
+                if atom.tnext <= self.time:
 
-        # stores the tout, qout, and nupd arrays to secondary arrays:
+                    atom.update(self.time)
+
+            for atom in self.atoms:
+
+                if atom.triggered:
+
+                    atom.update(self.time)
+
+
+        if 0:  # method 3: all < tnext atoms w/ nested triggered (multi-iter)
+
+            for atom in self.atoms:
+
+                if atom.tnext <= self.time:
+
+                    atom.update(self.time)
+
+                    i = 0
+                    while i < _MAXITER:
+                        triggered = False
+                        for atom in self.atoms:
+                            if atom.triggered:
+                                triggered = True
+                                atom.update(self.time)
+                        if not triggered:
+                            break
+                        i += 1
+
+        if 0:  # method 4: first tnext atoms, then iterate over triggered:
+
+            for atom in self.atoms:
+                if atom.tnext <= self.time:
+                    atom.update(self.time)
+
+            i = 0
+            while i < _MAXITER:
+                triggered = False
+                for atom in self.atoms:
+                    if atom.triggered:
+                        triggered = True
+                        atom.update(self.time)
+                if not triggered:
+                    break
+                i += 1
+
+        if 1:  # method 5: full outer loop iterations with nexted triggered:
+
+            i = 0
+            while i < _MAXITER:
+                triggered1 = False
+                for atom in self.atoms:
+                    if atom.tnext <= self.time:
+                        atom.update(self.time)
+                        triggered1 = True
+                    j = 0
+                    while j < _MAXITER:
+                        triggered2 = False
+                        for atom in self.atoms:
+                            if atom.triggered:
+                                triggered2 = True
+                                atom.update(self.time)
+                        if not triggered2:
+                            break
+                        j += 1
+                i += 1
+
+    def calc_steadystate(self):
+
+        self.jac1 = self.get_jacobian()
+
+        self.save_state()
+
+        self.xf = self.solve_dc(init=False, set=False)
+
+        for atom in self.state_atoms:
+            atom.xf = self.xf[atom.index]
+
+        self.jac2 = self.get_jacobian()
+
+        self.restore_state()
+
+    def print_natural_frequencies(self):
+
+        eigvals, eigvecs = eig(self.get_jacobian())
+
+        for eigval in eigvals:
+            print(f"{csqrt(eigval).real/(2*pi):10.6f} Hz")
+
+        for eigvec in eigvecs:
+            print(eigvec)
+
+    def print_states(self):
 
         for atom in self.atoms:
+            print(atom.x)
+        print()
 
-            atom.tout2 = atom.tout[:]
-            atom.qout2 = atom.qout[:]
-            atom.nupd2 = atom.nupd[:]
+    def update_steadystate_distance(self):
 
-    def print_percentage(self, header=False, footer=False):
-        
-        if header:
-            print("\n\nPercentage Complete:") #\n+" + "-"*98 + "+")
-            return
+       dq0 = [0.0]*self.n
+       for atom in self.state_atoms:
+           dq0[atom.index] = atom.dq0
 
-        if footer:
-            print("\nDone.\n\n")
-            return
+       self.steadystate_distance = la.norm(dq0) * self.Km
 
-        i = int(self.time / self.tstop * 100.0)
+    def optimize_dq(self):
 
-        while self.iprint < i:
-            print(str(self.iprint) + "%")
-            self.iprint += 1
+        if self.verbose:
+            print("dq0 = {}\n".format(self.dq0))
+            print("jac1 = {}\n".format(self.jac1))
+
+        if 1:
+
+            QQ0 = np.square(self.dq0)
+
+            JTJ = self.jac1.transpose().dot(self.jac1)
+            QQ = la.solve(JTJ, QQ0)
+            dq1 = np.sqrt(np.abs(QQ))
+
+            JTJ = self.jac2.transpose().dot(self.jac1)
+            QQ = la.solve(JTJ, QQ0)
+            dq2 = np.sqrt(np.abs(QQ))
+
+        if 0:
+
+            factor = 0.5
+
+            E = np.zeros((self.n, self.n))
+
+            dq1 = np.zeros((self.n, 1))
+            dq2 = np.zeros((self.n, 1))
+
+            for atom in self.state_atoms:
+                for j in range(self.n):
+                    if atom.index == j:
+                        E[atom.index, atom.index] = (atom.dq0*factor)**2
+                    else:
+                        pass
+                        E[atom.index, j] = (atom.dq0*factor)
+
+            JTJ = self.jac1.transpose().dot(self.jac1)
+            Q = la.solve(JTJ, E)
+
+            for atom in self.state_atoms:
+                dq = 999999.9
+                for j in range(self.n):
+                    if atom.index == j:
+                       dqii = sqrt(abs(Q[atom.index, j]))
+                       dqii = abs(Q[atom.index, j])
+                       if dqii < dq:
+                           dq = dqii
+                    else:
+                       dqij = abs(Q[atom.index, j])
+                       if dqij < dq:
+                           dq = dqij
+                dq1[atom.index, 0] = dq
+
+            JTJ = self.jac2.transpose().dot(self.jac2)
+            Q = la.solve(JTJ, E)
+
+            for atom in self.state_atoms:
+                dq = 999999.9
+                for j in range(self.n):
+                    if atom.index == j:
+                        dqii = sqrt(abs(Q[atom.index, j]))
+                        dqii = abs(Q[atom.index, j])
+                        if dqii < dq:
+                            dq = dqii
+                    else:
+                        dqij = abs(Q[atom.index, j])
+                        if dqij < dq:
+                            dq = dqij
+                dq2[atom.index, 0] = dq
+
+        if self.verbose:
+            print("at t=inf:")
+            print("dq1 = {}\n".format(dq1))
+            print("at t=0+:")
+            print("dq2 = {}\n".format(dq2))
+
+        for atom in self.state_atoms:
+
+            atom.dq = min(atom.dq0, dq1[atom.index, 0], dq2[atom.index, 0])
+            #atom.dq = min(dq1[atom.index, 0], dq2[atom.index, 0]) * 0.5
+
+            atom.qhi = atom.q + atom.dq
+            atom.qlo = atom.q - atom.dq
+
+            if self.verbose:
+                print("dq_{} = {} ({})\n".format(atom.full_name(), atom.dq, atom.units))
+
+    def check_steadystate(self, t, apply_if_true=True):
+
+        is_ss = False
+
+        q = [0.0]*self.n
+        for atom in self.state_atoms:
+            q[atom.index] = atom.q
+
+        qe = la.norm(np.add(q, -self.xf))
+
+        if (qe < self.steadystate_distance):
+            is_ss = True
+
+        if is_ss and apply_if_true:
+
+            for atom in self.state_atoms:
+                atom.set_state(self.xf[atom.index])
+
+            for atom in self.source_atoms:
+                atom.dint(t)
+                atom.q = atom.x
+
+        return is_ss
 
     def plot_devices(self, *devices, plot_qss=True, plot_ss=False,
-             plot_qss_updates=False, plot_ss_updates=False, legend=False):
+             plot_upd=False, plot_ss_updates=False, legend=False):
 
         for device in devices:
             for atom in devices.atoms:
                 atoms.append(atom)
 
         self.plot(self, *atoms, plot_qss=plot_qss, plot_ss=plot_ss,
-                  plot_qss_updates=plot_qss_updates,
+                  plot_upd=plot_upd,
                   plot_ss_updates=plot_ss_updates, legend=legend)
 
-    def plot(self, *atoms, plot_qss=True, plot_ss=False,
-             plot_qss_updates=False, plot_ss_updates=False, legend=False):
+    def plot_old(self, *atoms, plot_qss=True, plot_ss=False,
+             plot_upd=False, plot_ss_updates=False, legend=False):
 
         if not atoms:
-            atoms = [device.atom for device in self.devices]
+            atoms = self.state_atoms
 
         c, j = 2, 1
         r = floor(len(atoms)/2) + 1
@@ -1170,29 +2360,32 @@ class System(object):
 
             ax1 = None
             ax2 = None
-    
+
+            plt.subplot(r, c, j)
+
             if plot_qss or plot_ss:
 
-                plt.subplot(r, c, j)
                 ax1 = plt.gca()
-                ax1.set_ylabel("{} ({})".format(atom.full_name(), atom.units), color='b')
+                ax1.set_ylabel("{} ({})".format(atom.full_name(), atom.units),
+                               color='b')
                 ax1.grid()
+
+            if plot_upd or plot_ss_updates:
+                ax2 = ax1.twinx()
+                ax2.set_ylabel('updates', color='r')
 
             if plot_qss:
                 ax1.plot(atom.tzoh, atom.qzoh, 'b-', label="qss_q")
 
             if plot_ss:
-                ax1.plot(self.ss.t[1:], self.ss.y[atom.index-1][1:], 'c--', label="ss_x")
+                ax1.plot(atom.tout_ss, atom.xout_ss, 'c--', label="ss_x")
 
-            if plot_qss_updates or plot_ss_updates:
-                ax2 = ax1.twinx()
-                ax2.set_ylabel('total updates', color='r')
-                
-            if plot_qss_updates:
-                ax2.plot(atom.tout, atom.nupd, 'r-', label="qss_upds")
+            if plot_upd:
+                ax2.hist(atom.tout, 100)
+                #ax2.plot(atom.tout, atom.nupd, 'r-', label="qss updates")
 
             if plot_ss_updates:
-                ax2.plot(self.ss_tupd, self.ss_nupd, 'm--', label="ss_upds")
+                ax2.plot(self.tout_ss, self.nupd_ss, 'm--', label="ss_upds")
 
             if ax1 and legend:
                 ax1.legend(loc="upper left")
@@ -1201,60 +2394,570 @@ class System(object):
                 ax2.legend(loc="upper right")
 
             plt.xlabel("t (s)")
- 
+
             j += 1
 
         plt.tight_layout()
         plt.show()
 
-    def plot_groups(self, *groups, plot_ss=False, legend=True):
+    def plot_groups(self, *groups, plot_qss=False, plot_ss=False, plot_ode=False):
 
-        #mpl.style.use('seaborn')
+        c, j = 1, 1
+        r = CEIL(len(atoms) / c)
 
-        if len(groups) > 1:
-            c, j = 2, 1
-            r = floor(len(groups)/2) + 1
+        for atoms in groups:
 
-        for group in groups:
+            plt.subplot(r, c, j)
 
-            if len(groups) > 1:
-                plt.subplot(r, c, j)
+            if plot_qss:
 
-            for i, atom in enumerate(group):
+                for i, atom in enumerate(atoms):
 
-                lbl = "{} qss ({})".format(atom.full_name(), atom.units)
+                    color = "C{}".format(i)
 
-                color = 'C{}'.format(i)
+                    lbl = "{} qss ({})".format(atom.full_name(), atom.units)
 
-                plt.plot(atom.tout, atom.qout,
-                         marker='.',
-                         markersize=6,
-                         markerfacecolor='none',
-                         markeredgecolor=color,
-                         markeredgewidth=0.8,
-                         linestyle='none',
-                         label=lbl)
+                    plt.plot(atom.tout, atom.qout,
+                             marker='.',
+                             markersize=4,
+                             markerfacecolor='none',
+                             markeredgecolor=color,
+                             markeredgewidth=0.5,
+                             linestyle='none',
+                             label=lbl)
 
-                if plot_ss:
+            if plot_ode:
 
-                    lbl = "{} ss ({})".format(atom.full_name(), atom.units)
+                for i, atom in enumerate(atoms):
 
-                    plt.plot(self.ss.t[1:], self.ss.y[atom.index-1][1:], 
+                    color = "C{}".format(i)
+
+                    lbl = "{} ode ({})".format(atom.full_name(), atom.units)
+
+                    plt.plot(atom.tode, atom.xode,
                              color=color,
-                             linewidth=0.8,
+                             alpha=0.6,
+                             linewidth=1.0,
                              linestyle='dashed',
                              label=lbl)
 
-            if legend:
-                plt.legend()
-
+            plt.legend(loc="lower right")
+            plt.ylabel("atom state")
             plt.xlabel("t (s)")
             plt.grid()
- 
-            if len(groups) > 1:
-                j += 1
+
+            j += 1
 
         plt.tight_layout()
+        plt.show()
+
+    def plot(self, *atoms, plot_qss=False, plot_zoh=False, plot_ss=False, plot_ode=False,
+             plot_upd=False, plot_ss_updates=False, legloc=None,
+             plot_ode_updates=False, legend=True, errorband=False, upd_bins=1000,
+             pth=None):
+
+        c, j = 1, 1
+        r = CEIL(len(atoms) / c)
+
+        if r % c > 0.0: r += 1
+
+        fig = plt.figure()
+
+        for i, atom in enumerate(atoms):
+
+            plt.subplot(r, c, j)
+
+            ax1 = plt.gca()
+
+            if atom.units:
+                lbl = f"{atom.full_name()} ({atom.units})"
+            else:
+                lbl = atom.full_name()
+
+            ax1.set_ylabel(lbl, color='tab:red')
+
+            ax1.grid()
+
+            ax2 = None
+
+            if plot_upd or plot_ss_updates:
+
+                ax2 = ax1.twinx()
+                ylabel = "update frequency (Hz)"
+                ax2.set_ylabel(ylabel, color='tab:blue')
+
+            if plot_upd:
+
+                dt = atom.tout[-1] / upd_bins
+
+                label = "update frequency"
+                #ax2.hist(atom.tout, upd_bins, alpha=0.5,
+                #         color='b', label=label, density=True)
+
+                n = len(atom.tout)
+                bw = n**(-2/3)
+                kde = gaussian_kde(atom.tout, bw_method=bw)
+                t = np.arange(0.0, atom.tout[-1], dt/10)
+                pdensity = kde(t) * n
+
+                ax2.fill_between(t, pdensity, 0, lw=0,
+                                 color='tab:blue', alpha=0.2,
+                                 label=label)
+
+            if plot_ss_updates:
+
+                ax2.plot(self.tout_ss, self.nupd_ss, 'tab:blue', label="ss_upds")
+
+            if plot_qss:
+
+                #lbl = "{} qss ({})".format(atom.full_name(), atom.units)
+                lbl = f"QSS ({self.qss_method})"
+
+                ax1.plot(atom.tout, atom.qout,
+                         marker='.',
+                         markersize=4,
+                         markerfacecolor='none',
+                         markeredgecolor='tab:red',
+                         markeredgewidth=0.5,
+                         alpha=1.0,
+                         linestyle='none',
+                         label=lbl)
+
+            if plot_zoh:
+
+                lbl = f"QSS ({self.qss_method}) (ZOH)"
+
+                ax1.plot(atom.tzoh, atom.qzoh, color="tab:red", linestyle="-",
+                         alpha=0.5, label=lbl)
+
+            if plot_ss:
+
+                lbl = "State Space"
+
+                ax1.plot(atom.tout_ss, atom.xout_ss,
+                         color='r',
+                         linewidth=1.0,
+                         linestyle='dashed',
+                         label=lbl)
+
+            if plot_ode:
+
+                lbl = f"ODE ({self.ode_method})"
+
+                if errorband:
+
+                    xhi = [x + atom.dq0 for x in atom.xode]
+                    xlo = [x - atom.dq0 for x in atom.xode]
+
+
+                    ax1.plot(atom.tode, atom.xode,
+                             color='k',
+                             alpha=0.6,
+                             linewidth=1.0,
+                             linestyle='dashed',
+                             label=lbl)
+
+                    lbl = "Error Band"
+
+                    ax1.fill_between(atom.tode, xhi, xlo, color='k', alpha=0.1,
+                                     label=lbl)
+
+                else:
+
+                    ax1.plot(atom.tode, atom.xode,
+                             color='k',
+                             alpha=0.6,
+                             linewidth=1.0,
+                             linestyle='dashed',
+                             label=lbl)
+
+            loc = "best"
+
+            if legloc:
+                loc = legloc
+
+            lines1, labels1 = ax1.get_legend_handles_labels()
+
+            if ax2:
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax1.legend(lines1+lines2, labels1+labels2, loc=loc)
+            else:
+                ax1.legend(lines1, labels1, loc=loc)
+
+            plt.xlabel("t (s)")
+            j += 1
+
+        plt.tight_layout()
+
+        if pth:
+            fig.savefig(pth)
+        else:
+            plt.show()
+
+    def plot_csv(self, csvfiles, plot_upd=False, legloc=None, legend=True, upd_bins=1000, pth=None):
+
+        # t,q,e,n
+
+        c, j = 1, 1
+        r = CEIL(len(csvfiles) / c)
+
+        fig = plt.figure()
+
+        for i, filepath in enumerate(csvfiles):
+
+            plt.subplot(r, c, j)
+
+            head, tail = os.path.split(filepath)
+            filename, ext = os.path.splitext(tail)
+
+            tout = []
+            qout = []
+            evals = []
+            updates = []
+
+            lines = []
+
+            with open(filepath, "r") as f:
+                lines = f.readlines()
+
+            if not lines:
+                return
+
+            for line in lines[1:]:
+
+                items = line.split(",")
+
+                tout.append(items[0])
+                qout.append(items[1])
+                evals.append(items[2])
+
+                if len(items) > 2:
+                    updates.append(items[3])
+                else:
+                    updates.append(0)
+
+            ax1 = plt.gca()
+            ax1.set_ylabel("{}".format(filename), color='tab:red')
+            ax1.grid()
+
+            ax2 = None
+
+            if plot_upd or plot_ss_updates:
+
+                ax2 = ax1.twinx()
+                ylabel = "update density ($s^{-1}$)"
+                ax2.set_ylabel(ylabel, color='tab:blue')
+
+            if plot_upd:
+
+                dt = tout[-1] / upd_bins
+
+                label = "update density"
+                #ax2.hist(atom.tout, upd_bins, alpha=0.5,
+                #         color='b', label=label, density=True)
+
+                n = len(tout)
+                bw = n**(-2/3)
+                kde = gaussian_kde(tout, bw_method=bw)
+                t = np.arange(0.0, tout[-1], dt/10)
+                pdensity = kde(t) * n
+
+                ax2.fill_between(t, pdensity, 0, lw=0,
+                                 color='tab:blue', alpha=0.2,
+                                 label=label)
+
+            #if plot_ss_updates:
+            #
+            #    ax2.plot(self.tout_ss, self.nupd_ss, 'tab:blue', label="ss_upds")
+
+            if plot_qss:
+
+                #lbl = "{} qss ({})".format(atom.full_name(), atom.units)
+                lbl = "qss"
+
+                ax1.plot(tout, qout,
+                         marker='.',
+                         markersize=4,
+                         markerfacecolor='none',
+                         markeredgecolor='tab:red',
+                         markeredgewidth=0.5,
+                         alpha=1.0,
+                         linestyle='none',
+                         label=lbl)
+
+            #if plot_zoh:
+            #
+            #    lbl = "qss (zoh)"
+            #
+            #    ax1.plot(atom.tzoh, atom.qzoh, color="tab:red", linestyle="-",
+            #             alpha=0.5, label=lbl)
+
+            #if plot_ss:
+            #
+            #    lbl = "ss"
+            #
+            #    ax1.plot(atom.tout_ss, atom.xout_ss,
+            #             color='r',
+            #             linewidth=1.0,
+            #             linestyle='dashed',
+            #             label=lbl)
+
+            #if plot_ode:
+            #
+            #    lbl = "ode"
+            #
+            #    if errorband:
+            #
+            #        xhi = [x + atom.dq0 for x in atom.xode]
+            #        xlo = [x - atom.dq0 for x in atom.xode]
+            #
+            #
+            #        ax1.plot(atom.tode, atom.xode,
+            #                 color='k',
+            #                 alpha=0.6,
+            #                 linewidth=1.0,
+            #                 linestyle='dashed',
+            #                 label=lbl)
+            #
+            #        lbl = "error band"
+            #
+            #        ax1.fill_between(atom.tode, xhi, xlo, color='k', alpha=0.1,
+            #                         label=lbl)
+            #
+            #    else:
+            #
+            #        ax1.plot(atom.tode, atom.xode,
+            #                 color='k',
+            #                 alpha=0.6,
+            #                 linewidth=1.0,
+            #                 linestyle='dashed',
+            #                 label=lbl)
+
+            loc = "best"
+
+            if legloc:
+                loc = legloc
+
+            lines1, labels1 = ax1.get_legend_handles_labels()
+
+            if ax2:
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax1.legend(lines1+lines2, labels1+labels2, loc=loc)
+            else:
+                ax1.legend(lines1, labels1, loc=loc)
+
+            plt.xlabel("t (s)")
+            j += 1
+
+        plt.tight_layout()
+
+        if pth:
+            fig.savefig(pth)
+        else:
+            plt.show()
+
+    def plotxy(self, atomx, atomy, arrows=False, ss_region=False, auto_limits=False):
+
+        ftheta = interp1d(atomx.tout, atomx.qout, kind='zero')
+        fomega = interp1d(atomy.tout, atomy.qout, kind='zero')
+
+        tboth = np.concatenate((atomx.tout, atomy.tout))
+        tsort = np.sort(tboth)
+        t = np.unique(tsort)
+
+        x = ftheta(t)
+        y = fomega(t)
+        u = np.diff(x, append=x[-1])
+        v = np.diff(y, append=x[-1])
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+
+        if not auto_limits:
+            r = max(abs(max(x)), abs(min(x)), abs(max(y)), abs(min(y)))
+
+            dq = atomx.dq
+            rx = r + (dq - r % dq) + dq * 5
+
+            dx = rx*0.2 + (dq - rx*0.2 % dq)
+            x_major_ticks = np.arange(-rx, rx, dx)
+            x_minor_ticks = np.arange(-rx, rx, dx*0.2)
+
+            dq = atomy.dq
+            ry = r + (dq - r % dq) + dq * 5
+
+            dy = ry*0.2 + (dq - ry*0.2 % dq)
+            y_major_ticks = np.arange(-ry, ry, dy)
+            y_minor_ticks = np.arange(-ry, ry, dy*0.2)
+
+            ax.set_xticks(x_major_ticks)
+            ax.set_xticks(x_minor_ticks, minor=True)
+            ax.set_yticks(y_major_ticks)
+            ax.set_yticks(y_minor_ticks, minor=True)
+
+            plt.xlim([-rx, rx])
+            plt.ylim([-ry, ry])
+
+        if ss_region:
+            dq = sqrt(atomx.dq**2 + atomx.dq**2) * self.Km
+            region= plt.Circle((atomx.xf, atomy.xf), dq, color='k', alpha=0.2)
+            ax.add_artist(region)
+
+        if arrows:
+            ax.quiver(x[:-1], y[:-1], u[:-1], v[:-1], color="tab:red",
+                   units="dots", width=1, headwidth=10, headlength=10, label="qss")
+
+            ax.plot(x, y, color="tab:red", linestyle="-")
+        else:
+            ax.plot(x, y, color="tab:red", linestyle="-", label="qss")
+
+        ax.plot(atomx.xode, atomy.xode, color="tab:blue", linestyle="--", alpha=0.4, label="ode")
+
+        ax.grid(b=True, which="major", color="k", alpha=0.3, linestyle="-")
+        ax.grid(b=True, which="minor", color="k", alpha=0.1, linestyle="-")
+
+        plt.xlabel(atomx.full_name() + " ({})".format(atomx.units))
+        plt.ylabel(atomy.full_name() + " ({})".format(atomy.units))
+
+        ax.set_aspect("equal")
+
+        plt.legend()
+        plt.show()
+
+    def plotxyt(self, atomx, atomy, arrows=True, ss_region=False):
+
+        fx = interp1d(atomx.tout, atomx.qout, kind='zero')
+        fy = interp1d(atomy.tout, atomy.qout, kind='zero')
+
+        tboth = np.concatenate((atomx.tout, atomy.tout))
+        tsort = np.sort(tboth)
+        t = np.unique(tsort)
+
+        x = fx(t)
+        y = fy(t)
+        u = np.diff(x, append=x[-1])
+        v = np.diff(y, append=x[-1])
+
+        fig = plt.figure()
+
+        ax = plt.axes(projection="3d")
+
+        dq = sqrt(atomx.dq**2 + atomx.dq**2) * self.Km
+
+        def cylinder(center, r, l):
+            x = np.linspace(0, l, 100)
+            theta = np.linspace(0, 2*pi, 100)
+            theta_grid, x_grid = np.meshgrid(theta, x)
+            y_grid = r * np.cos(theta_grid) + center[0]
+            z_grid = r * np.sin(theta_grid) + center[1]
+            return x_grid, y_grid, z_grid
+
+        Xc, Yc, Zc = cylinder((0.0, 0.0), 0.1, t[-1])
+
+        ax.plot_surface(Xc, Yc, Zc, alpha=0.2)
+
+        ax.scatter3D(t, x, y, c=t, cmap="hsv", marker=".")
+        ax.plot3D(t, x, y)
+
+        ax.plot3D(atomy.tode, atomx.xode, atomy.xode, color="tab:blue", linestyle="--", alpha=0.4, label="ode")
+
+        ax.set_ylabel(atomx.full_name() + " ({})".format(atomx.units))
+        ax.set_zlabel(atomy.full_name() + " ({})".format(atomy.units))
+        ax.set_xlabel("t (s)")
+
+        xmax = max(abs(min(x)), max(x))
+        ymax = max(abs(min(y)), max(y))
+        xymax = max(xmax, ymax)
+
+        ax.set_xlim([0.0, t[-1]])
+        ax.set_ylim([-xymax, xymax])
+        ax.set_zlim([-xymax, xymax])
+
+        plt.legend()
+
+        plt.show()
+
+    def plotxy2(self, atomsx, atomsy, arrows=True, ss_region=False):
+
+        fx1 = interp1d(atomsx[0].tout, atomsx[0].qout, kind='zero')
+        fx2 = interp1d(atomsx[1].tout, atomsx[1].qout, kind='zero')
+
+        fy1 = interp1d(atomsy[0].tout, atomsy[0].qout, kind='zero')
+        fy2 = interp1d(atomsy[1].tout, atomsy[1].qout, kind='zero')
+
+        tall = np.concatenate((atomsx[0].tout, atomsx[1].tout,
+                               atomsy[0].tout, atomsy[1].tout))
+
+        tsort = np.sort(tall)
+
+        t = np.unique(tsort)
+
+        x1 = fx1(t)
+        x2 = fx2(t)
+
+        y1 = fy1(t)
+        y2 = fy2(t)
+
+        x = np.multiply(x1, x2)
+        y = np.multiply(y1, y2)
+
+        u = np.diff(x, append=x[-1])
+        v = np.diff(y, append=x[-1])
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+
+        r = max(abs(max(x)), abs(min(x)), abs(max(y)), abs(min(y)))
+
+        dq = atomsx[0].dq
+        rx = r + (dq - r % dq) + dq * 5
+
+        dx = rx*0.2 + (dq - rx*0.2 % dq)
+        x_major_ticks = np.arange(-rx, rx, dx)
+        x_minor_ticks = np.arange(-rx, rx, dx*0.2)
+
+        dq = atomsy[0].dq
+        ry = r + (dq - r % dq) + dq * 5
+
+        dy = ry*0.2 + (dq - ry*0.2 % dq)
+        y_major_ticks = np.arange(-ry, ry, dy)
+        y_minor_ticks = np.arange(-ry, ry, dy*0.2)
+
+        ax.set_xticks(x_major_ticks)
+        ax.set_xticks(x_minor_ticks, minor=True)
+        ax.set_yticks(y_major_ticks)
+        ax.set_yticks(y_minor_ticks, minor=True)
+
+        #plt.xlim([-rx, rx])
+        #plt.ylim([-ry, ry])
+
+        #if ss_region:
+        #    dq = sqrt(atomx.dq**2 + atomx.dq**2) * self.Km
+        #    region= plt.Circle((atomx.xf, atomy.xf), dq, color='k', alpha=0.2)
+        #    ax.add_artist(region)
+
+        if arrows:
+            ax.quiver(x[:-1], y[:-1], u[:-1], v[:-1], color="tab:red",
+                   units="dots", width=1, headwidth=10, headlength=10, label="qss")
+
+            ax.plot(x, y, color="tab:red", linestyle="-")
+        else:
+            ax.plot(x, y, color="tab:red", linestyle="-", label="qss")
+
+        xode = np.multiply(atomsx[0].xode, atomsx[1].xode)
+        yode = np.multiply(atomsy[0].xode, atomsy[1].xode)
+
+        ax.plot(xode, yode, color="tab:blue", linestyle="--", alpha=0.4, label="ode")
+
+        #ax.grid(b=True, which="major", color="k", alpha=0.3, linestyle="-")
+        #ax.grid(b=True, which="minor", color="k", alpha=0.1, linestyle="-")
+
+        plt.xlabel("{} * {}".format(atomsx[0].name, atomsx[0].name))
+        plt.ylabel("{} * {}".format(atomsy[0].name, atomsy[0].name))
+
+        #ax.set_aspect("equal")
+
+        plt.legend()
         plt.show()
 
     def __repr__(self):
@@ -1266,30 +2969,12 @@ class System(object):
         return self.name
 
 
-# ========================== Interface Model ===================================
+# ============================ Interfaces ======================================
 
 
 class Device(object):
 
-    """Collection of Atoms, Ports and Viewables that comprise a device.
-
-    .--------------.
-    |              |-------o inout_port_1
-    |              |-------o inout_port_2
-    |  Device      |  ...
-    |              |-------o port_N  
-    | (atoms)      |  ...
-    |              |-------< in_port_1
-    | (viewables)  |-------< in_port_2
-    |              |  ...
-    |              |-------< in_port_N 
-    |              |  ...
-    |              |-------> out_port_1
-    |              |-------> out_port_2
-    |              |  ...
-    |              |-------> out_port_N 
-    '--------------'
-
+    """Collection of Atoms and Connections that comprise a device
     """
 
     def __init__(self, name):
@@ -1297,38 +2982,32 @@ class Device(object):
         self.name = name
         self.atoms = []
         self.ports = []
-        self.viewables = []
 
     def add_atom(self, atom):
-        
+
         self.atoms.append(atom)
         atom.device = self
         setattr(self, atom.name, atom)
 
     def add_atoms(self, *atoms):
-        
+
         for atom in atoms:
             self.add_atom(atom)
 
-    def add_port(self, port):
-        
-        port.device = self
+    def add_port(self, name, typ, *connections):
+
+        port = Port(name, typ, *connections)
         self.ports.append(port)
+        port.device = self
+        setattr(self, name, port)
 
-    def add_ports(self, *ports):
-        
-        for port in ports:
-            self.add_port(port)
+    def setup_connections(self):
 
-    def add_viewable(self, viewable):
-        
-        viewable.device = self
-        self.viewables.append(viewable)
+        pass
 
-    def add_viewables(self, *viewables):
-        
-        for viewable in viewables:
-            self.add_viewable(viewable)
+    def setup_functions(self):
+
+        pass
 
     def __repr__(self):
 
@@ -1339,224 +3018,544 @@ class Device(object):
         return __repr__(self)
 
 
+class Connection(object):
+
+    """Connection between atoms.
+    """
+
+    def __init__(self, atom=None, other=None, coefficient=1.0, coeffunc=None,
+                 valfunc=None, dvalfunc=None):
+
+        self.atom = atom
+        self.other = other
+        self.coefficient = coefficient
+        self.coeffunc = coeffunc
+        self.valfunc = valfunc
+        self.dvalfunc = dvalfunc
+
+        self.device = None
+
+        if atom and other:
+            self.reset_atoms(atom, other)
+
+    def reset_atoms(self, atom, other):
+
+        self.atom = atom
+        self.other = other
+
+        self.other.broadcast_to.append(self.atom)
+
+    def compute_coefficient(self):
+
+        if self.coeffunc:
+            return self.coeffunc(self.device)
+        else:
+            return self.coefficient
+
+    def value(self):
+
+        if self.other:
+
+            if self.valfunc:
+
+                return self.valfunc(self.other)
+
+            else:
+
+                return self.compute_coefficient() * self.other.q
+
+                #if isinstance(self.other, StateAtom):
+                #    return self.compute_coefficient() * self.other.q
+                #
+                #elif isinstance(self.other, SourceAtom):
+                #    return self.compute_coefficient() * self.other.dint()
+        else:
+
+            return 0.0
+
+    def dvalue(self):
+
+        if self.other:
+
+            if self.dvalfunc:
+
+                return self.dvalfunc(self.other)
+
+            else:
+
+                return self.compute_coefficient() * self.other.dx
+
+                #if isinstance(self.other, StateAtom):
+                #    return self.compute_coefficient() * self.other.dx
+                #
+                #elif isinstance(self.other, SourceAtom):
+                #    return self.compute_coefficient() * self.other.f(self.other.q)
+        else:
+
+            return 0.0
+
+
+class PortConnection(object):
+
+    def __init__(self, invar, outvar, state=None, sign=1, expr=""):
+
+        self.invar = invar
+        self.outvar = outvar
+        self.state = state
+        self.sign = sign
+        self.expr = expr
+        self.from_connections = []
+        self.port = None
+
+
 class Port(object):
 
-    """Mediates the connections and data transfer between atoms.
-    """
-
-    def __init__(self, name, atom, direction=PortDirection.INOUT, gain=1.0):
+    def __init__(self, name, typ="in", *connections):
 
         self.name = name
-        self.direction = direction
-        self.atom = atom
-        self.gain = gain
-
-        self.connected_ports = []
+        self.typ = typ
         self.device = None
 
-    def __repr__(self):
+        if connections:
+            self.connections = connections
+            for connection in self.connections:
+                connection.port = self
+        else:
+            self.connections = []
 
-        return self.device.name + "." + self.name
+    def connect(self, other):
 
-    def __str__(self):
+        if self.typ == "in":
+            self.connections[0].from_connections.append(other.connections[0])
 
-        return __repr__(self)
+        elif self.typ == "out":
+            other.connections[0].from_connections.append(self.connections[0])
 
+        elif self.typ in ("inout"):
+            self.connections[0].from_connections.append(other.connections[0])
+            other.connections[0].from_connections.append(self.connections[0])
 
-class Viewable(object):
+        elif self.typ in ("dq"):
+            self.connections[0].from_connections.append(other.connections[0])
+            other.connections[0].from_connections.append(self.connections[0])
+            self.connections[1].from_connections.append(other.connections[1])
+            other.connections[1].from_connections.append(self.connections[1])
 
-    def __init__(self, name, func, units=""):
-
-        self.name = name
-        self.func = func
-        self.units = units
-        self.device = None
-
-    def __repr__(self):
-
-        return self.device.name + "." + self.name
-
-    def __str__(self):
-
-        return __repr__(self)
-
-
-# ============================ Basic Devices ===================================
-
-class LimGround(Device):
-
-    def __init__(self, name="ground"):
-
-        Device.__init__(self, name)
-
-        self.atom = Atom(name="voltage", is_latent=False,
-                 source_type=SourceType.CONSTANT, lim_type=LimAtomType.GROUND_NODE,
-                 x0=0.0, units="V")
-
-        self.positive = Port("positive", self.atom, PortDirection.INOUT)
-
-        self.add_atom(self.atom)
-        self.add_port(self.positive)
+        elif self.typ in ("abc"):
+            self.connections[0].from_connections.append(other.connections[0])
+            other.connections[0].from_connections.append(self.connections[0])
+            self.connections[1].from_connections.append(other.connections[1])
+            other.connections[1].from_connections.append(self.connections[1])
+            self.connections[2].from_connections.append(other.connections[2])
+            other.connections[2].from_connections.append(self.connections[2])
 
 
-class LimLatencyNode(Device):
+class SymbolicDevice(Device):
 
-    """Generic LIM Lantency Node with G, C, I, B and S components.
-                                
-                       \       
-               i_i2(t)  ^   ... 
-                         \   
-                 i_i1(t)  \     i_ik(t)
-                ----<------o------>----
-                           |
-                           |   ^
-                           |   | i_i(t)
-           .--------.------+------------.--------------.
-           |        |      |    i_b =   |      i_s =   |       +
-          ,-.      <.     _|_   b_k *  ,^.     s_pq * ,^.     
-    H(t) ( ^ )   G <.   C ___  v_k(t) < ^ >  i_pq(t) < ^ >   v(t)
-          `-'      <.      |           `.' ^          `.' ^   
-           |        |      |            |   \          |   \   -
-           '--------'------+------------'----\---------'    \
-                          _|_                 \              '---- port_s
-                           -                   '---- port_b   
-
-
-    isum = -(h + i_s + i_b) + v*G + v'*C
-
-    v'= 1/C * (isum + h + i_s + i_b - v*G) 
-
-    """
-
-    def __init__(self, name, c, g=0.0, h=0.0, v0=0.0,
-                 source_type=SourceType.NONE, v1=0.0, v2=0.0, va=0.0, freq=0.0,
-                 phi=0.0, duty=0.0, t1=0.0, t2=0.0, dq=None):
+    def __init__(self, name):
 
         Device.__init__(self, name)
 
-        self.atom = Atom(name="voltage", a=c, b=g, c=h, is_latent=True, derivative=self.derivative,
-                 source_type=source_type, lim_type=LimAtomType.LATENCY_NODE,
-                 x0=v0, x1=v1, x2=v2, xa=va, freq=freq, phi=phi, duty=duty,
-                 t1=t1, t2=t2, units="V", dq=dq)
+        self.states = odict()
+        self.constants = odict()
+        self.parameters = odict()
+        self.algebraic = odict()
+        self.diffeq = []
+        self.dermap = odict()
+        self.jacobian = odict()
 
-        self.positive = Port("positive", self.atom, PortDirection.INOUT, gain=-1.0)
+    def add_state(self, name, dername, desc="", units="", x0=0.0, dq=1e-3):
 
-        self.add_atom(self.atom)
-        self.add_port(self.positive)
+        self.states[name] = odict()
 
-    def derivative(self):
+        self.states[name]["name"] = name
+        self.states[name]["dername"] = dername
+        self.states[name]["desc"] = desc
+        self.states[name]["units"] = units
+        self.states[name]["x0"] = x0
+        self.states[name]["dq"] = dq
+        self.states[name]["device"] = self
 
-        return 1.0 / self.atom.a * (-self.atom.q * self.atom.b + self.current()
-                                   + self.atom.c)
-    def current(self):
+        self.states[name]["sym"] = None
+        self.states[name]["dersym"] = None
+        self.states[name]["expr"] = None
+        self.states[name]["atom"] = None
 
-        return sum([port.atom.q * port.gain for port in self.positive.connected_ports])
+        self.dermap[dername] = name
+
+    def add_constant(self, name, desc="", units="", value=None):
+
+        self.constants[name] = odict()
+
+        self.constants[name]["name"] = name
+        self.constants[name]["desc"] = desc
+        self.constants[name]["units"] = units
+        self.constants[name]["value"] = value
+
+        self.constants[name]["sym"] = None
+
+    def add_parameter(self, name, desc="", units="", value=None):
+
+        self.parameters[name] = odict()
+
+        self.parameters[name]["name"] = name
+        self.parameters[name]["desc"] = desc
+        self.parameters[name]["units"] = units
+        self.parameters[name]["value"] = value
+
+        self.parameters[name]["sym"] = None
+
+    def add_diffeq(self, equation):
+
+        self.diffeq.append(equation)
+
+    def add_algebraic(self, var, rhs):
+
+        self.algebraic[var] = rhs
+
+    def update_parameter(self, key, value):
+
+        self.parameters[key]["value"] = value
+
+    def add_input_port(self, name, var, sign=1):
+
+        connection = PortConnection(var, sign=sign)
+        self.add_port(name, "in", connection)
+
+    def add_output_port(self, name, var=None, state=None, expr=""):
+
+        connection = PortConnection(var, state=state, sign=sign, expr=expr)
+        self.add_port(name, "out", connection)
+
+    def add_electrical_port(self, name, input, output, sign=1, expr=""):
+
+        connection = PortConnection(input, output, sign=sign, expr=expr)
+        self.add_port(name, "inout", connection)
+
+    def add_dq_port(self, name, inputs, outputs, sign=1, exprs=None):
+
+        expr_d = ""
+        expr_q = ""
+
+        if exprs:
+            expr_d, expr_q = exprs
+
+        connection_d = PortConnection(inputs[0], outputs[0], sign=sign, expr=expr_d)
+        connection_q = PortConnection(inputs[1], outputs[1], sign=sign, expr=expr_q)
+
+        self.add_port(name, "dq", connection_d, connection_q)
+
+    def setup_connections(self):
+
+        for name, state in self.states.items():
+
+            atom = StateAtom(name, x0=state["x0"], dq=state["dq"],
+                             units=state["units"])
+
+            atom.derargfunc = self.get_args
+
+            self.add_atom(atom)
+
+            self.states[name]["atom"] = atom
+
+    def setup_functions(self):
+
+        # 1. create sympy symbols:
+
+        x = []
+        dx_dt = []
+
+        for name, state in self.states.items():
+
+            sym = sp.Symbol(name)
+            dersym = sp.Symbol(state["dername"])
+
+            x.append(name)
+            dx_dt.append(state["dername"])
+
+            self.states[name]["sym"] = sym
+            self.states[name]["dersym"] = dersym
+
+        for name in self.constants:
+            sp.Symbol(name)
+
+        for name in self.parameters:
+            sp.Symbol(name)
+
+        for port in self.ports:
+            for connection in port.connections:
+                sp.Symbol(connection.invar)
+
+        for var in self.algebraic:
+            sp.Symbol(var)
+
+        # 2. create symbolic derivative expressions:
+
+        # 2a. substitute algebraic equations:
+
+        n = len(self.algebraic)
+        m = len(self.diffeq)
+
+        algebraic = [[sp.Symbol(var), sp.sympify(expr)] for var, expr in self.algebraic.items()]
 
 
-class LimLatencyBranch(Device):
+        for i in range(n-1):
+             for j in range(i+1, n):
+                 algebraic[j][1] = algebraic[j][1].subs(algebraic[i][0], algebraic[i][1])
 
-    """Generic LIM Lantency Branch with R, L, V, T and Z components.
+        diffeq = self.diffeq.copy()
 
-                    +                v_ij(t)              -
+        for i in range(m):
+            diffeq[i] = sp.sympify(diffeq[i])
+            for var, expr in algebraic:
+                diffeq[i] = diffeq[i].subs(var, expr)
 
-                                     i(t) --> 
+        # 3. solve for derivatives:
 
-                                   v_t(t) =        v_z(t) =
-             v(t)  +   -   +   -  T_ijk * v_k(t)  Z_ijpq * i_pq(t)
-  positive   ,-.     R       L         ,^.           ,^.      negative
-      o-----(- +)---VVV-----UUU-------<- +>---------<- +>-------o
-             `-'                       `.'           `.'  
-                                        ^             ^
-                                        |             |
-                                     port_t         port_z
+        derexprs = solve(diffeq, *dx_dt, dict=True)
 
-    vij = -(v + vt + vz) + i*R + i'*L
+        for lhs, rhs in derexprs[0].items():
 
-    i'= 1/L * (vij + v + vt + vz - i*R) 
+            dername = str(lhs)
+            statename = self.dermap[dername]
+            self.states[statename]["expr"] = rhs
 
-    """
+        # 4. create atoms:
 
-    def __init__(self, name, l, r=0.0, e=0.0, i0=0.0,
-                 source_type=SourceType.NONE, i1=0.0, i2=0.0, ia=0.0, freq=0.0,
-                 phi=0.0, duty=0.0, t1=0.0, t2=0.0, dq=None):
+        ext_varnames = []
 
-        Device.__init__(self, name)
+        ext_varsubs = {}
 
-        self.atom = Atom(name="current", a=l, b=r, c=e, is_latent=True, derivative=self.derivative,
-                 source_type=source_type, lim_type=LimAtomType.LATENCY_BRANCH,
-                 x0=i0, x1=i1, x2=i2, xa=ia, freq=freq, phi=phi, duty=duty,
-                 t1=t1, t2=t2, units="A", dq=dq)
+        external_vars = []
 
-        self.positive = Port("positive", self.atom, PortDirection.INOUT, gain=1.0)
-        self.negative = Port("negative", self.atom, PortDirection.INOUT, gain=-1.0)
+        # 4.a. set up ports:
 
-        self.add_atom(self.atom)
-        self.add_ports(self.positive, self.negative)
+        for port in self.ports:     # todo: other port types
 
-    def derivative(self):
+            if port.typ == "inout":
 
-        return 1.0 / self.atom.a * (-self.atom.q * self.atom.b + self.voltage()
-                                    + self.atom.c)
-    
-    def voltage(self):
+                sign = 1
 
-        vi = self.negative.connected_ports[0].atom.q
-        vj = self.positive.connected_ports[0].atom.q
+                for connection in port.connections:
 
-        return vi - vj
+                    varname = connection.invar
+                    sign = connection.sign
 
-# =============================== Tests ========================================
+                    for from_connection in connection.from_connections:
+
+                        devicename = from_connection.port.device.name
+                        varname = from_connection.outvar
+
+                        mangeld_name = "{}_{}".format(devicename, varname)
+                        ext_varnames.append(mangeld_name)
+
+                        external_vars.append(varname)
+
+            # make a sum expression for all input symbols:
+
+            ext_varsubs[varname] = "(" + " + ".join(ext_varnames) + ")"
+
+            if sign == -1:
+                ext_varsubs[varname] = "-" + ext_varsubs[varname]
+
+        # 4.b.
+
+        argstrs = (list(self.constants.keys()) +
+                   list(self.parameters.keys()) +
+                   list(self.states.keys()) +
+                   ext_varnames)
+
+        argstr = " ".join(argstrs)
+        argsyms = sp.var(argstr)
+
+        for name, state in self.states.items():
+
+            expr = state["expr"]
+
+            for var, substr in ext_varsubs.items():
+                subexpr = sp.sympify(substr)
+                expr = expr.subs(var, subexpr)
+
+            state["expr"] = expr
+
+            func = lambdify(argsyms, expr, dummify=False)
+
+            self.states[name]["atom"].derfunc = func
+
+        for name in self.output_ports:
+
+            statename = self.output_ports[name]["state"]
+            state = self.states[statename]
+            self.output_ports[name]["atom"] = state["atom"]
+
+        # 5. connect atoms:
+
+        for statex in self.states.values():
+
+            for statey in self.states.values():
+
+                f = statex["expr"]
+
+                if statey["sym"] in f.free_symbols:
+
+                    # connect:
+                    statex["atom"].add_connection(statey["atom"])
+
+                    # add jacobian expr:
+                    df_dy = sp.diff(f, statey["sym"])
+
+                    func = lambdify(argsyms, df_dy, dummify=False)
+
+                    statex["atom"].add_jacfunc(statey["atom"], func)
+
+            for var in external_vars:
+
+                statey = self.states[var]
+
+                f = statex["expr"]
+
+                mangled_name = "{}_{}".format(statey["device"].name, statey["name"])
+                mangled_symbol = sp.Symbol(mangled_name)
+
+                if mangled_symbol in f.free_symbols:
+
+                    # connect:
+                    statex["atom"].add_connection(statey["atom"])
+
+                    # jacobian expr:
+                    df_dy = sp.diff(f, mangled_symbol)
+
+                    func = lambdify(argsyms, df_dy, dummify=False)
+
+                    statex["atom"].add_jacfunc(statey["atom"], func)
+
+    @staticmethod
+    def get_args(self):
+
+        args = []
+
+        for name, constant in self.constants.items():
+            args.append(float(constant["value"]))
+
+        for name, parameter in self.parameters.items():
+            args.append(float(parameter["value"]))
+
+        for name, state in self.states.items():
+            args.append(float(state["atom"].q))
+
+        for name, port in self.input_ports.items():
+            for port2 in port["ports"]:
+               args.append(port2["atom"].q)
+
+        return args
 
 
-if __name__ == "__main__":
+def plot_csv(*csvfiles, plot_upd=False, legloc=None, legend=True, upd_bins=1000, pth=None):
 
-     sys = System(dq=1e-2)
+    # t,q,e,n
 
-     ground = LimGround("ground")
-     node1 = LimLatencyNode("node1", 1.0, 1.0, 0.0)
-     node2 = LimLatencyNode("node2", 1.0, 1.0, 0.0)
-     node3 = LimLatencyNode("node3", 1.0, 1.0, 0.0)
+    c, j = 1, 1
+    r = len(csvfiles)/c
 
-     branch1 = LimLatencyBranch("branch1", 1.0, 0.1, 10.0)
-     branch2 = LimLatencyBranch("branch2", 1.0, 0.1, 0.0)
-     branch3 = LimLatencyBranch("branch2", 1.0, 0.1, 0.0)
+    if r % c > 0.0: r += 1
 
-     sys.add_devices(ground, node1, branch1, node2, node3, branch2, branch3)
+    fig = plt.figure()
 
-     sys.connect(branch1.negative, ground.positive)
-     sys.connect(branch1.positive, node1.positive)
+    for i, filepath in enumerate(csvfiles):
 
-     sys.connect(branch2.negative, node1.positive)
-     sys.connect(branch2.positive, node2.positive)
+        plt.subplot(r, c, j)
 
-     sys.connect(branch3.negative, node2.positive)
-     sys.connect(branch3.positive, node3.positive)
+        head, tail = os.path.split(filepath)
+        filename, ext = os.path.splitext(tail)
 
-     tstop = 60.0
-     dc = True
+        tout = []
+        qout = []
+        evals = []
+        updates = []
 
-     sys.initialize_ss(1e-3, dc=dc)
-     sys.initialize(dc=dc)
+        lines = []
 
-     sys.run_ss_to(tstop*0.2)
-     sys.run_to(tstop*0.2)
+        with open(filepath, "r") as f:
+            lines = f.readlines()
 
-     node2.atom.b = 1000.0
+        if not lines:
+            return
 
-     sys.initialize_ss(1e-3, reset_state=False)
+        for line in lines[1:]:
 
-     sys.run_ss_to(tstop*0.2+0.1)
-     sys.run_to(tstop*0.2+0.1)
+            items = line.split(",")
 
-     node2.atom.b = 1.0
+            tout.append(float(items[0]))
+            qout.append(float(items[1]))
+            evals.append(int(items[2]))
 
-     sys.initialize_ss(1e-3, reset_state=False)
+            if len(items) > 3:
+                updates.append(int(items[3]))
+            else:
+                updates.append(0)
 
-     sys.run_ss_to(tstop)
-     sys.run_to(tstop)
+        ax1 = plt.gca()
+        ax1.set_ylabel("{}".format(filename), color='tab:red')
+        ax1.grid()
 
-     sys.finalize_ss()
+        ax2 = None
 
-     sys.plot_groups((node1.voltage, node2.voltage, node3.voltage), plot_ss=True)
+        if plot_upd or plot_ss_updates:
 
-     sys.plot_groups((branch1.current, branch2.current, branch3.current), plot_ss=True)
+            ax2 = ax1.twinx()
+            ylabel = "update frequency (Hz)"
+            ax2.set_ylabel(ylabel, color='tab:blue')
+
+        if plot_upd:
+
+            dt = tout[-1] / upd_bins
+
+            label = "update frequency"
+            #ax2.hist(atom.tout, upd_bins, alpha=0.5,
+            #         color='b', label=label, density=True)
+
+            n = len(tout)
+            bw = n**(-2/3)
+            kde = gaussian_kde(tout, bw_method=bw)
+            t = np.arange(0.0, tout[-1], dt/10)
+            pdensity = kde(t) * n
+
+            ax2.fill_between(t, pdensity, 0, lw=0,
+                                color='tab:blue', alpha=0.2,
+                                label=label)
+
+        #if plot_ss_updates:
+        #
+        #    ax2.plot(self.tout_ss, self.nupd_ss, 'tab:blue', label="ss_upds")
+
+        if True:
+
+            #lbl = "{} qss ({})".format(atom.full_name(), atom.units)
+            lbl = "qss"
+
+            ax1.plot(tout, qout, marker='.', markersize=4, markerfacecolor='none',
+                     markeredgecolor='tab:red', markeredgewidth=0.5, alpha=1.0,
+                     linestyle='none', label=lbl)
+
+        loc = "best"
+
+        if legloc:
+            loc = legloc
+
+        lines1, labels1 = ax1.get_legend_handles_labels()
+
+        if ax2:
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax1.legend(lines1+lines2, labels1+labels2, loc=loc)
+        else:
+            ax1.legend(lines1, labels1, loc=loc)
+
+        plt.xlabel("t (s)")
+        j += 1
+
+    plt.tight_layout()
+
+    if pth:
+        fig.savefig(pth)
+    else:
+        plt.show()
