@@ -5,7 +5,7 @@
     <ProjectGuid>42ca2317-fdf6-423b-9001-e649d5872c5c</ProjectGuid>
     <ProjectHome>
     </ProjectHome>
-    <StartupFile>qdl.py</StartupFile>
+    <StartupFile>plot_error.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -14,6 +14,7 @@
     <RootNamespace>QdlPy</RootNamespace>
     <IsWindowsApplication>False</IsWindowsApplication>
     <InterpreterId>Global|PythonCore|3.7</InterpreterId>
+    <TestFramework>Pytest</TestFramework>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
@@ -33,6 +34,8 @@
     <Compile Include="models.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="plot_data.py" />
+    <Compile Include="plot_error.py" />
     <Compile Include="qss.py" />
     <Compile Include="qdl.py" />
     <Compile Include="lti.py">
@@ -44,6 +47,8 @@
   </ItemGroup>
   <ItemGroup>
     <InterpreterReference Include="Global|PythonCore|3.7" />
+    <InterpreterReference Include="Global|PythonCore|3.8" />
+    <InterpreterReference Include="Global|PythonCore|3.9" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
