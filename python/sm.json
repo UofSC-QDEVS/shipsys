@@ -1,17 +1,9 @@
 {
     "name": "Synchronous Machine",
+    "desc": "Three-phase DQ synchronous machine with turbo-governor model",
+    "prefix": "SM",
     "parameters": [
-        [ "VLL", "V", 4160.0 ],
-        [ "ws", "rad/s", 188.9 ],
-        [ "P", "", 2 ],
-        [ "rs", "V", 4160.0 ],
-        [ "VLL", "V", 4160.0 ],
-        [ "VLL", "V", 4160.0 ],
-        [ "VLL", "V", 4160.0 ],
-        [ "VLL", "V", 4160.0 ],
-        [ "VLL", "V", 4160.0 ]
-        },
-
+        {
             "name": "rs",
             "desc": "Stator resistance",
             "units": "Ohm",
@@ -108,57 +100,12 @@
             "default": 4160.0
         }
     ],
-    "states": [
-        {
-            "name": "fkq",
-            "desc": "Q-axis flux",
-            "units": "Wb",
-            "derivative": "dfkq_dt"
-        },
-        {
-            "name": "fkd",
-            "desc": "D-axis flux",
-            "units": "Wb",
-            "derivative": "dfkd_dt"
-        },
-        {
-            "name": "ffd",
-            "desc": "Field winding flux",
-            "units": "Wb",
-            "derivative": "dffd_dt"
-        },
-
-        {
-            "name": "wr",
-            "desc": "Rotor speed",
-            "units": "rad/s",
-            "derivative": "dwr_dt"
-        },
-        {
-            "name": "th",
-            "desc": "Rotor angle",
-            "units": "rad",
-            "derivative": "dth_dt"
-        },
-        {
-            "name": "iqs",
-            "desc": "Q-axis terminal current",
-            "units": "A",
-            "derivative": "diqs_dt"
-        },
-        {
-            "name": "ids",
-            "desc": "D-axis terminal current",
-            "units": "A",
-            "derivative": "dids_dt"
-        }
-    ],
     "ports": [
         {
             "name": "Electrical Terminal",
             "type": "dq",
             "input": [ "vds", "vqs" ],
-            "output":  ["ids", "iqs"]
+            "output": [ "ids", "iqs" ]
         }
     ],
     "algebraic": [
@@ -199,13 +146,56 @@
             "expr": "Kp * (ws - wr) + th * Ki\")"
         }
     ],
-    "diffeq": [
-        "diqs_dt * Lls + rs * iqs + wr * Ld + wr * fd - vqs",
-        "dids_dt * Lls + rs * ids - wr * Lq - wr * fq - vds",
-        "dfkq_dt * Llkq + rkq * (fkq - Lq * iqs - fq + Lls * iqs)",
-        "dfkd_dt * Llkd + rkd * (fkd - Ld * ids + fd + Lls * ids)",
-        "dffd_dt * Llfd + rfd * (ffd - Ld * ids + fd + Lls * ids) - vfd",
-        "dwr_dt * J + Tm - Te",
-        "dth_dt + wr - ws"
+    "states": [
+        {
+            "name": "fkq",
+            "desc": "Q-axis flux",
+            "units": "Wb",
+            "derivative": "dfkq_dt",
+            "diffeq": "dfkq_dt * Llkq + rkq * (fkq - Lq * iqs - fq + Lls * iqs)"
+        },
+        {
+            "name": "fkd",
+            "desc": "D-axis flux",
+            "units": "Wb",
+            "derivative": "dfkd_dt",
+            "diffeq": "dfkd_dt * Llkd + rkd * (fkd - Ld * ids + fd + Lls * ids)"
+        },
+        {
+            "name": "ffd",
+            "desc": "Field winding flux",
+            "units": "Wb",
+            "derivative": "dffd_dt",
+            "diffeq": "dffd_dt * Llfd + rfd * (ffd - Ld * ids + fd + Lls * ids) - vfd"
+        },
+
+        {
+            "name": "wr",
+            "desc": "Rotor speed",
+            "units": "rad/s",
+            "derivative": "dwr_dt",
+            "diffeq": "diqs_dt * Lls + rs * iqs + wr * Ld + wr * fd - vqs"
+        },
+        {
+            "name": "th",
+            "desc": "Rotor angle",
+            "units": "rad",
+            "derivative": "dth_dt",
+            "diffeq": "dth_dt + wr - ws"
+        },
+        {
+            "name": "iqs",
+            "desc": "Q-axis terminal current",
+            "units": "A",
+            "derivative": "diqs_dt",
+            "diffeq": "diqs_dt * Lls + rs * iqs + wr * Ld + wr * fd - vqs"
+        },
+        {
+            "name": "ids",
+            "desc": "D-axis terminal current",
+            "units": "A",
+            "derivative": "dids_dt",
+            "diffeq": "dids_dt * Lls + rs * ids - wr * Lq - wr * fq - vds"
+        }
     ]
 }

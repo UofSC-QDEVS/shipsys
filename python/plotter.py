@@ -8,6 +8,7 @@ import numpy as np
 
 from scipy.stats import gaussian_kde  # kernel-density estimate
 from scipy.interpolate import interp1d
+from scipy.signal import find_peaks 
 
 from scipy.fft import fft, fftfreq
 
@@ -102,12 +103,17 @@ class MarkerUpdater:
         self.timer_dict[fig] = timer
 
 
-def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
-             update_rate=True, subplot=False, ode=True):
+def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1", update_rate=True,
+             subplot=False, ode=True, endtime=None, xlim=None, ylim=None, ylim2=None,
+             ylims=None, figsize=None):
 
     fig = plt.figure()
 
-    n = len(atoms)
+    if figsize:
+        fig.set_size_inches(*figsize, forward=True)
+        fig.set_dpi(100)
+
+    natoms = len(atoms)
 
     if not subplot:
 
@@ -123,15 +129,15 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         if update_rate:
             ax2.set_ylabel("QSS Update Rate (Hz)")
         else:
-            ax2.set_ylabel("Cummulative QSS Updates")
+            ax2.set_ylabel("Cumulative QSS Updates")
 
     updater = MarkerUpdater()
 
-    for i, (atom, label, color) in enumerate(atoms):
+    for iatom, (atom, label, color) in enumerate(atoms):
 
         if subplot:
 
-            plt.subplot(n, 1, i+1)
+            plt.subplot(natoms, 1, iatom+1)
 
             ax1 = None
             ax2 = None
@@ -143,7 +149,7 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
             if update_rate:
                 ax2.set_ylabel("QSS Update Rate (Hz)")
             else:
-                ax2.set_ylabel("Cummulative QSS Updates")
+                ax2.set_ylabel("Cumulative QSS Updates")
 
         devicename, atomname = atom.split(".")
 
@@ -160,9 +166,8 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         with open(tpth, "rb") as f: tout = pickle.load(f)
         with open(qpth, "rb") as f: qout = pickle.load(f)
 
-        if ode:
-            with open(topth, "rb") as f: tode = pickle.load(f)
-            with open(xopth, "rb") as f: xode = pickle.load(f)
+        with open(topth, "rb") as f: tode = pickle.load(f)
+        with open(xopth, "rb") as f: xode = pickle.load(f)
 
         #with open(upth, "rb") as f: upds = pickle.load(f)
         #with open(tzpth, "rb") as f: tzoh = pickle.load(f)
@@ -171,7 +176,32 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         #tzoh = np.zeros((len(tout)*2,))
         #qzoh = np.zeros((len(tout)*2,))
 
-        upds = list(range(len(tout)))
+        tout2 = tout
+        qout2 = qout
+
+        tode2 = tode
+        xode2 = xode
+
+        if endtime:
+
+            for itime, t in enumerate(tout):
+                if t >= endtime:
+                    last_qss_index = itime
+                    break
+
+            tout2 = collections.deque(itertools.islice(tout, 0, last_qss_index))
+            qout2 = collections.deque(itertools.islice(qout, 0, last_qss_index))
+
+            for i, time in enumerate(tode):
+                if t >= endtime:
+                    last_ode_index = itime
+                    break
+
+            tode2 = collections.deque(itertools.islice(tode, 0, last_ode_index))
+            xode2 = collections.deque(itertools.islice(xode, 0, last_ode_index))
+
+
+        upds = list(range(len(tout2)))
 
         if subplot:
 
@@ -195,16 +225,16 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
             else:
                 lblu = f"{atom} Updates"
 
-        ax1.plot(tout, qout,
+        ax1.plot(tout2, qout2,
                  alpha=1.0,
                  linestyle='-',
                  color=color,
-                 linewidth=0.5,
+                 linewidth=1.0,
                  label=lblz)
 
         if ode:
 
-            ax1.plot(tode, xode,
+            ax1.plot(tode2, xode2,
                      alpha=1.0,
                      linestyle='--',
                      color='black',
@@ -215,17 +245,17 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
 
             rate = np.gradient(upds, tout)
 
-            tout2 = collections.deque(itertools.islice(tout, 2, len(tout)))
-            rate2 = collections.deque(itertools.islice(rate, 2, len(tout)))
+            tout3 = collections.deque(itertools.islice(tout2, 2, len(tout2)))
+            rate3 = collections.deque(itertools.islice(rate, 2, len(tout)))
 
-            ax2.plot(tout2, rate2,
+            ax2.plot(tout3, rate3,
                      alpha=1.0,
                      linestyle='dotted',
                      color=color,
                      linewidth=2.0,
                      label=lblu)
         else:
-            ax2.plot(tout, upds,
+            ax2.plot(tout2, upds,
                      alpha=1.0,
                      linestyle='dotted',
                      color=color,
@@ -249,6 +279,19 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
 
             ax1.set_ylabel(f"{label}")
 
+            if ylim:
+                ax1.set_ylim(ylim)
+
+            if xlim:
+                ax1.set_xlim(xlim)
+
+            if ylim2:
+                ax2.set_ylim(ylim2)
+            elif ylims:
+                ax2.set_ylim(ylims[iatom])
+
+        ax1.set_xlabel("t (s)")
+
     if not subplot:
 
         if ylabel:
@@ -265,8 +308,17 @@ def plot_qss(dir_, atoms, ylabel=None, loc="best", method="LIQSS1",
         else:
             ax1.legend(lines1, labels1, loc=loc)
 
+        ax1.set_xlabel("t (s)")
 
-    plt.xlabel("t (s)")
+
+    if xlim:
+        plt.xlim(xlim)
+
+    if ylim2:
+        plt.ylim(ylim2)
+
+    if ylims:
+        plt.ylim(ylims[0])
 
     plt.show()
 
@@ -333,7 +385,7 @@ def plot_updates(dir_, atoms, upd_bins=50, labels=None, cumm=False, title="", lo
             else:
                 plt.plot(touts[i], nupd[:-1], label=label)
 
-            ax.set_ylabel("Cummulative Atom Updates")
+            ax.set_ylabel("Cumulative Atom Updates")
 
         else:
 
@@ -382,7 +434,7 @@ def plot_updates(dir_, atoms, upd_bins=50, labels=None, cumm=False, title="", lo
     plt.show()
 
 
-def plot_fft(dir_, atoms, tspan, dt=1e-4):
+def plot_fft(dir_, atoms, tspan, dt=1e-6, peaks=True, semilog=False):
 
     tstart, tstop = tspan
 
@@ -408,21 +460,34 @@ def plot_fft(dir_, atoms, tspan, dt=1e-4):
         yf = fft(f(tnew))
         xf = fftfreq(n, T)[:n//2]
 
-        plt.plot(xf[1:n], 2.0/n * np.abs(yf[1:n//2]))
+        xf_scaled = xf[1:n]
+        yf_scaled = 2.0/n * np.abs(yf[1:n//2])
+
+        if semilog:
+            plt.semilogy(xf_scaled, yf_scaled)
+        else:
+            plt.plot(xf_scaled, yf_scaled)
+
         plt.grid()
+
+        if not peaks:
+            return
+
+        peaks, properties = find_peaks(yf_scaled, height=None, threshold=None, distance=None, prominence=0.15, width=None, wlen=None, rel_height=0.5, plateau_size=None)
+
+        for ipeak in peaks:
+            try:
+                print(f"freq = {xf_scaled[ipeak]}    amplitude = {yf_scaled[ipeak]}")
+            except:
+                pass
+
         plt.show()
-
-
-def freq_analysis():
-
-    dir_ = r"D:\School\qdl\VREF_INCREASE\60s"
-
-    plot_fft(dir_, ["sm.ids", "bus1.vd"], [20.0, 60.0])
 
 
 def paper2_plots():
 
     dir_ = r"D:\School\qdl\VREF_INCREASE\60s"
+    #dir_ = r"C:\Temp\qdl\LOAD_INCREASE\60s"
 
     ode = True
 
@@ -443,8 +508,80 @@ def paper2_plots():
         ("bus2.vd", "$V_{ds}$ (V)", "tab:blue"),
         ]
 
+        plot_qss(dir_, atoms, loc="lower left",
+                 update_rate=False, subplot=True, ode=True, endtime=60.0,
+                 xlim=[0.8, 60.0], ylims=[(0, 5000), (0, 50000), (0, 50000)],
+                 figsize=(10, 4))
+
+    if 0:  
+        atoms = [
+        ("bus2.vd", "$V_{ds}$ (V)", "tab:blue"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower left",
+                 update_rate=False, subplot=True, ode=True, endtime=1.02,
+                 xlim=[0.95, 1.02], #ylims=[(0, 5000), (0, 50000), (0, 50000)],
+                 figsize=(10, 4))
+
+    if 0:   # 1
+        dir_ = r"C:\Temp\qdl\LOAD_INCREASE\60s"
+        atoms = [
+        ("im.wr", "$\omega_r$ (rad/s)", "tab:green"),
+        #("im.ids", "$I_{ds}$ (A)", "tab:green"),
+        ]
+
         plot_qss(dir_, atoms, loc="lower right",
-                 update_rate=False, subplot=True, ode=ode)
+                 update_rate=False, subplot=True, ode=True, figsize=(10, 4),
+                 xlim=[0.0, 10.0], ylim=[188.0, 189.0], ylim2=[0, 4000])
+
+    if 0:   # 2
+        #dir_ = r"C:\Temp\qdl\VREF_INCREASE\60s"
+        dir_ = r"C:\Temp\qdl\LOAD_INCREASE\60s"
+        atoms = [
+        ("im.wr", "$\omega_r$ (rad/s)", "tab:green"),
+        ]
+
+        plot_qss(dir_, atoms, loc="upper right",
+                 update_rate=False, subplot=True, ode=True, figsize=(10, 4),
+                 xlim=[0.0, 10.0], ylim=[188.0, 189.0], ylim2=[0, 10000])
+        
+    if 0:   # 3
+        dir_ = r"D:\School\qdl\VREF_INCREASE\60s"
+        #dir_ = r"C:\Temp\qdl\LOAD_INCREASE\60s"
+        atoms = [
+        ("im.wr", "$\omega_r$ (rad/s)", "tab:green"),
+        ]
+
+        plot_qss(dir_, atoms, loc="upper right",
+                 update_rate=False, subplot=True, ode=True, figsize=(10, 4),
+                 xlim=[10.0, 20.0], ylim=[188.47, 188.53], ylim2=[0, 10000])
+
+    if 0:   # 4
+        dir_ = r"D:\School\qdl\VREF_INCREASE\60s"
+        
+        atoms = [
+        ("im.wr", "$\omega_r$ (rad/s)", "tab:green"),
+        ("im.ids", "$I_{ds}$ (A)", "tab:red"),
+        ("bus2.vd", "$V_{ds}$ (V)", "tab:blue"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=True, figsize=(12, 8),
+                 xlim=[0.8, 2.0], ylims=([0, 40000], [0, 40000], [0, 40000]))
+
+    if 0:   # 5
+        dir_ = r"D:\School\qdl\LOAD_INCREASE\60s"
+        
+        atoms = [
+        ("im.wr", "$\omega_r$ (rad/s)", "tab:green"),
+        ("im.ids", "$I_{ds}$ (A)", "tab:red"),
+        ("bus2.vd", "$V_{ds}$ (V)", "tab:blue"),
+        ]
+
+        plot_qss(dir_, atoms, loc="lower right",
+                 update_rate=False, subplot=True, ode=True, figsize=(12, 8),
+                 xlim=[0.8, 2.0], ylims=([0, 40000], [0, 40000], [0, 40000]))
+        
     if 0:
         atoms = [
         ("sm.wr", "$\omega_{r}$ (rad/s)", "tab:green"),
@@ -454,6 +591,8 @@ def paper2_plots():
         plot_qss(dir_, atoms, loc="lower right",
                  update_rate=False, subplot=True, ode=ode)
     if 0:
+        #dir_ = r"C:\Temp\qdl\VREF_INCREASE\60s"
+        dir_ = r"C:\Temp\qdl\LOAD_INCREASE\60s"
         atoms = [
         ("sm.iqs", "$I_{qs}$ (A)", "tab:green"),
         ("bus1.vd", "$V_{ds}$ (V)", "tab:red"),
@@ -479,15 +618,51 @@ def paper2_plots():
                  update_rate=False, subplot=True, ode=ode)
 
     if 1:
-        plot_updates(dir_, ["im.wr", "im.ids", "bus2.vd"],
-                 labels=[r"$\omega_r$", "$I_{ds}$", "$V_{ds}$"],
+        plot_updates(dir_, ["im.wr", "im.ids", "bus2.vd", "cable23.iq"],
+                 labels=[r"Induction machine speed ($\omega_{r}$)", r"Induction machine terminal current ($i_{ds}$)", r"Induction machine terminal voltage ($v_{ds}$)", "Cable 2-3 Current ($i_{qs}$)"],
                  #title="Induction Machine Atom Updates",
                  cumm=True, log=True, refdt=1e-5)
+
     if 0:
-        plot_updates(dir_, ["sm.wr", "sm.th", "sm.ids", "bus1.vd"],
-                 labels=[r"$\omega_r$", r"$\theta$", "$I_{ds}$", "$V_{ds}$"],
+        plot_updates(dir_, ["sm.wr", "sm.th", "sm.ids", "bus1.vd", "cable23.iq"],
+                 labels=[r"$\omega_r$", r"$\theta$", "$I_{ds}$", "$V_{ds}$", "$iq_{cable23}$"],
                  #title="Synchronous Machine Atom Updates",
                  cumm=True, log=True, refdt=1e-5)
-#paper2_plots()
 
-freq_analysis()
+#paper2_plots()
+#plot_fft(dir_=r"D:\School\qdl\LOAD_INCREASE\60s", atoms=["sm.iqs"], tspan=[30.0, 60.0], dt=1e-7)
+
+
+def process_pendulum_data():
+
+    """
+        x=0:0.01:20*2*pi;
+        y=abs(cos(10*pi*x));
+        ac=xcorr(y,y);
+        [~,locs]=findpeaks(ac);
+        mean(diff(locs)*0.01)
+    """
+
+    dir_ = r"C:\Temp\qdl\pendulum"
+
+    plot_fft(dir_, ["pendulum.omega", "pendulum.theta"], [8000, 10000], dt=1e-5, peaks=True)
+
+    """
+    for atom, in ["pendulum.omega", "pendulum.theta"]:
+
+        devicename, atomname = atom.split(".")
+
+        tpth = os.path.join(dir_, devicename + "_" + atomname + "_tout.pickle")
+        qpth = os.path.join(dir_, devicename + "_" + atomname + "_qout.pickle")
+
+        with open(tpth, "rb") as f: tout = pickle.load(f)
+        with open(qpth, "rb") as f: qout = pickle.load(f)
+        
+        #autocorr = correlate(qpth, qpth, mode='full', method='auto')
+        #peaks, properties = find_peaks(autocorr) #, height=None, threshold=None, distance=None, prominence=0.15, width=None, wlen=None, rel_height=0.5, plateau_size=None)
+     """
+
+
+if __name__ == "__main__":
+
+    process_pendulum_data()

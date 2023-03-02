@@ -1708,9 +1708,9 @@ class System(object):
             for atomj in atomi.broadcast_to:        # 8
 
                 e = t - atomj.tlast                 # 9
-                atomj.x = atomj.x + atomj.dx * e     # 10
+                atomj.x = atomj.x + atomj.dx * e    # 10
 
-                atomj.dx = atomj.f(atomj.q, t)       # 12
+                atomj.dx = atomj.f(atomj.q, t)      # 12
                 atomj.ta(t)                         # 13
 
                 if atomj is not atomi:
@@ -1755,8 +1755,8 @@ class System(object):
             e = t - atomi.tlast                               # 4
             ee = e**2
 
-            atomi.x += atomi.dx * e + 0.5 * atomi.ddx * ee     # 6
-            atomi.dx += atomi.ddx * e                          # 7
+            atomi.x += atomi.dx * e + 0.5 * atomi.ddx * ee    # 6
+            atomi.dx += atomi.ddx * e                         # 7
 
             if atomi.q >= atomi.q + atomi.dq:
                 atomi.q += atomi.dq
@@ -2206,11 +2206,32 @@ class System(object):
 
         eigvals, eigvecs = eig(self.get_jacobian())
 
+        freqs = []
         for eigval in eigvals:
-            print(f"{csqrt(eigval).real/(2*pi):10.6f} Hz")
+            f = sqrt(abs(eigval)) * (2*pi)
+            freqs.append(f)
+         
+        for f in sorted(freqs):
+            print(f"{f:10.3f} Hz")
 
-        for eigvec in eigvecs:
-            print(eigvec)
+        """
+
+        freqs = {}
+
+        for i, eigvec in enumerate(eigvecs):
+            key = self.state_atoms[i].full_name()
+            freqs[key] = []
+            for eigval in eigvec:
+                #f = abs(csqrt(eigval).real) * (2*pi)
+                f = sqrt(abs(eigval)) * (2*pi)
+                freqs[key].append(f)
+
+        print("sm.iqs:")
+
+        for freq in sorted(freqs["sm.iqs"]):
+            print("\t", f"{freq:10.3f}", "Hz")
+        """
+
 
     def print_states(self):
 
